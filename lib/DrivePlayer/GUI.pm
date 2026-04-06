@@ -286,15 +286,16 @@ sub _build_tracklist {
     my $sw = Gtk3::ScrolledWindow->new();
     $sw->set_policy('automatic', 'automatic');
 
-    # ListStore columns: id, track#, title, artist, album, duration_str, drive_id
+    # ListStore columns: id, track#, title, artist, album, genre, duration_str, drive_id
     my $store = Gtk3::ListStore->new(
         'Glib::Int',    # 0 db id
         'Glib::String', # 1 track#
         'Glib::String', # 2 title
         'Glib::String', # 3 artist
         'Glib::String', # 4 album
-        'Glib::String', # 5 duration
-        'Glib::String', # 6 drive_id
+        'Glib::String', # 5 genre
+        'Glib::String', # 6 duration
+        'Glib::String', # 7 drive_id
     );
     $self->track_store($store);
 
@@ -310,7 +311,8 @@ sub _build_tracklist {
         ['Title',    2, 250, TRUE],
         ['Artist',   3, 180, TRUE],
         ['Album',    4, 180, TRUE],
-        ['Duration', 5, 70,  FALSE],
+        ['Genre',    5, 120, FALSE],
+        ['Duration', 6, 70,  FALSE],
     );
     for my $col_def (@cols) {
         my ($title, $idx, $width, $expand) = @$col_def;
@@ -468,6 +470,14 @@ sub _populate_sidebar {
         $store->set($iter, 0, $album, 1, 'album', 2, $album);
     }
 
+    # Genres
+    my $gen_iter = $store->append(undef);
+    $store->set($gen_iter, 0, 'Genres', 1, 'category', 2, '');
+    for my $genre ($self->db->all_genres()) {
+        my $iter = $store->append($gen_iter);
+        $store->set($iter, 0, $genre, 1, 'genre', 2, $genre);
+    }
+
     # Folders
     my $fld_iter = $store->append(undef);
     $store->set($fld_iter, 0, 'Folders', 1, 'category', 2, '');
@@ -494,8 +504,9 @@ sub _populate_tracklist {
             2, $t->{title}        // '(Unknown)',
             3, $t->{artist}       // '',
             4, $t->{album}        // '',
-            5, _dur_str($t->{duration_ms}),
-            6, $t->{drive_id}     // '',
+            5, $t->{genre}        // '',
+            6, _dur_str($t->{duration_ms}),
+            7, $t->{drive_id}     // '',
         );
     }
 }
@@ -607,6 +618,8 @@ sub _sidebar_activated {
         $self->_populate_tracklist($self->db->tracks_by_artist($value));
     } elsif ($type eq 'album') {
         $self->_populate_tracklist($self->db->tracks_by_album($value));
+    } elsif ($type eq 'genre') {
+        $self->_populate_tracklist($self->db->tracks_by_genre($value));
     } elsif ($type eq 'folder') {
         my $sf = $self->db->get_scan_folder_by_drive_id($value) or return;
         $self->_populate_tracklist($self->db->tracks_by_scan_folder($sf->{id}));
@@ -1046,8 +1059,77 @@ sub _tracklist_context_menu {
     });
     $menu->append($play_item);
 
+    my $edit_item = Gtk3::MenuItem->new_with_label('Edit Metadata…');
+    $edit_item->signal_connect(activate => sub {
+        my $sel  = $self->track_view->get_selection();
+        my @rows = $sel->get_selected_rows();
+        return unless @rows;
+        my ($ridx) = $rows[0]->get_indices();
+        my $track  = $self->_playlist->[$ridx];
+        $self->_edit_metadata_dialog($track) if $track;
+    });
+    $menu->append($edit_item);
+
     $menu->show_all();
     $menu->popup_at_pointer($event);
+}
+
+sub _edit_metadata_dialog {
+    my ($self, $track) = @_;
+
+    my $dlg = Gtk3::Dialog->new_with_buttons(
+        'Edit Metadata', $self->win,
+        [qw/ modal destroy-with-parent /],
+        'Save',   'ok',
+        'Cancel', 'cancel',
+    );
+    $dlg->set_default_size(460, 280);
+
+    my $grid = Gtk3::Grid->new();
+    $grid->set_row_spacing(6);
+    $grid->set_column_spacing(8);
+    $grid->set_border_width(12);
+    $dlg->get_content_area()->add($grid);
+
+    my %entries;
+    my $row = 0;
+    for my $field (
+        [ title        => 'Title:'        ],
+        [ artist       => 'Artist:'       ],
+        [ album        => 'Album:'        ],
+        [ genre        => 'Genre:'        ],
+        [ composer     => 'Composer:'     ],
+        [ track_number => 'Track Number:' ],
+        [ year         => 'Year:'         ],
+        [ comment      => 'Comment:'      ],
+    ) {
+        my ($key, $lbl) = @$field;
+        my $label = Gtk3::Label->new($lbl);
+        $label->set_xalign(1.0);
+        $grid->attach($label, 0, $row, 1, 1);
+        my $entry = Gtk3::Entry->new();
+        $entry->set_hexpand(TRUE);
+        $entry->set_text($track->{$key} // '');
+        $grid->attach($entry, 1, $row, 1, 1);
+        $entries{$key} = $entry;
+        $row++;
+    }
+
+    $dlg->show_all();
+    if ($dlg->run() eq 'ok') {
+        my %fields;
+        for my $key (keys %entries) {
+            my $val = $entries{$key}->get_text();
+            $fields{$key} = length($val) ? $val : undef;
+        }
+        # Coerce numeric fields
+        for my $key (qw( track_number year )) {
+            $fields{$key} = $fields{$key} ? int($fields{$key}) : undef;
+        }
+        $self->db->update_track_metadata($track->{id}, %fields);
+        $self->_load_library();
+    }
+    $dlg->destroy();
 }
 
 sub _clear_library {

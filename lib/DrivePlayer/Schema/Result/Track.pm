@@ -61,6 +61,18 @@ __PACKAGE__->add_columns(
         data_type   => 'text',
         is_nullable => 1,
     },
+    genre => {
+        data_type   => 'text',
+        is_nullable => 1,
+    },
+    composer => {
+        data_type   => 'text',
+        is_nullable => 1,
+    },
+    comment => {
+        data_type   => 'text',
+        is_nullable => 1,
+    },
 );
 
 __PACKAGE__->set_primary_key('id');

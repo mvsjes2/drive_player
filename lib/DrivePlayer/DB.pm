@@ -116,9 +116,22 @@ sub upsert_track {
             modified_time => $t{modified_time},
             folder_id     => $t{folder_id},
             folder_path   => $t{folder_path},
+            genre         => $t{genre},
+            composer      => $t{composer},
+            comment       => $t{comment},
         },
         { key => 'unique_drive_id' },
     );
+}
+
+sub update_track_metadata {
+    my ($self, $id, %fields) = @_;
+    my $row = $self->_rs('Track')->find($id) or return;
+    my %allowed = map { $_ => 1 }
+        qw( title artist album track_number year genre composer comment );
+    my %update = map { $_ => $fields{$_} }
+        grep { $allowed{$_} } keys %fields;
+    $row->update(\%update) if %update;
 }
 
 sub get_track {
@@ -197,6 +210,25 @@ sub search_tracks {
                 artist => { like => $like },
                 album  => { like => $like },
             ]},
+            { order_by => \@TRACK_ORDER },
+        )->all;
+}
+
+sub all_genres {
+    my ($self) = @_;
+    return $self->_rs('Track')->search(
+        { genre => [ -and => { '!=' => undef }, { '!=' => '' } ] },
+        { columns  => ['genre'],
+          distinct  => 1,
+          order_by  => \['LOWER(genre)'] },
+    )->get_column('genre')->all;
+}
+
+sub tracks_by_genre {
+    my ($self, $genre) = @_;
+    return map { _row_to_hash($_) }
+        $self->_rs('Track')->search(
+            \[ 'LOWER(genre) = LOWER(?)', $genre ],
             { order_by => \@TRACK_ORDER },
         )->all;
 }

@@ -23,9 +23,18 @@ sub connect_and_deploy {
     );
 
     # Deploy only when the database is new (tracks table absent)
-    my @tables = $schema->storage->dbh->tables(undef, undef, 'tracks', 'TABLE');
+    my $dbh    = $schema->storage->dbh;
+    my @tables = $dbh->tables(undef, undef, 'tracks', 'TABLE');
     unless (@tables) {
         $schema->deploy({ add_drop_table => 0 });
+    }
+
+    # Migrate: add columns introduced after initial deploy
+    my %existing = map { $_->[1] => 1 }
+        @{ $dbh->selectall_arrayref('PRAGMA table_info(tracks)') };
+    for my $col (qw( genre composer comment )) {
+        next if $existing{$col};
+        $dbh->do("ALTER TABLE tracks ADD COLUMN $col TEXT");
     }
 
     return $schema;

@@ -792,10 +792,13 @@ sub _browse_folder_dialog {
         'Cancel', 'cancel',
     );
     $dlg->set_default_size(460, 420);
+    $dlg->set_response_sensitive('ok', FALSE);
 
-    # TreeStore columns: 0=name 1=id 2=children_loaded
-    my $store = Gtk3::TreeStore->new('Glib::String', 'Glib::String', 'Glib::Boolean');
-    my $tree  = Gtk3::TreeView->new($store);
+    # TreeStore columns: 0=name 1=id 2=children_loaded 3=expand_filter
+    my $store = Gtk3::TreeStore->new(
+        'Glib::String', 'Glib::String', 'Glib::Boolean', 'Glib::String',
+    );
+    my $tree = Gtk3::TreeView->new($store);
     $tree->set_headers_visible(FALSE);
     $tree->append_column(
         Gtk3::TreeViewColumn->new_with_attributes(
@@ -808,7 +811,7 @@ sub _browse_folder_dialog {
     $sw->set_vexpand(TRUE);
     $sw->add($tree);
 
-    my $status = Gtk3::Label->new('Loading…');
+    my $status = Gtk3::Label->new(q{});
     $status->set_xalign(0.0);
 
     my $vbox = Gtk3::Box->new('vertical', 6);
@@ -818,24 +821,42 @@ sub _browse_folder_dialog {
     $dlg->get_content_area()->add($vbox);
     $dlg->show_all();
 
-    # Load root-level folders
-    $self->_load_drive_children($store, undef, 'root', $status);
+    # Virtual top-level nodes — id is empty so they are not selectable as folders
+    my $mf = "mimeType='application/vnd.google-apps.folder' and trashed=false";
+    for my $node (
+        [ 'My Drive',       "'root' in parents and $mf"  ],
+        [ 'Shared with me', "sharedWithMe=true and $mf"  ],
+    ) {
+        my ($label, $filter) = @$node;
+        my $iter = $store->append(undef);
+        $store->set($iter, 0, $label, 1, q{}, 2, FALSE, 3, $filter);
+        my $ph = $store->append($iter);
+        $store->set($ph, 0, "Loading\x{2026}", 1, q{}, 2, FALSE, 3, q{});
+    }
+
+    # Enable Select only when a real folder (non-empty id) is highlighted
+    $tree->get_selection()->signal_connect(changed => sub {
+        my ($sel) = @_;
+        my (undef, $iter) = $sel->get_selected();
+        my $id = $iter ? $store->get($iter, 1) : q{};
+        $dlg->set_response_sensitive('ok', ($id ne q{}) ? TRUE : FALSE);
+    });
 
     # Lazy-load subfolders when a row is expanded
     $tree->signal_connect('row-expanded' => sub {
         my (undef, $iter, undef) = @_;
-        return if $store->get($iter, 2);    # already loaded
+        return if $store->get($iter, 2);
         $store->set($iter, 2, TRUE);
         my $child = $store->iter_children($iter);
-        $store->remove($child) if $child;   # remove placeholder
-        my $folder_id = $store->get($iter, 1);
-        $self->_load_drive_children($store, $iter, $folder_id, $status);
+        $store->remove($child) if $child;
+        my $filter = $store->get($iter, 3);
+        $self->_load_drive_children($store, $iter, $filter, $status);
     });
 
     my $response = $dlg->run();
     my $result;
     if ($response eq 'ok') {
-        my ($model, $iter) = $tree->get_selection()->get_selected();
+        my (undef, $iter) = $tree->get_selection()->get_selected();
         if ($iter) {
             my ($name, $id) = $store->get($iter, 0, 1);
             $result = { id => $id, name => $name } if $id;
@@ -846,13 +867,11 @@ sub _browse_folder_dialog {
 }
 
 sub _load_drive_children {
-    my ($self, $store, $parent_iter, $folder_id, $status) = @_;
+    my ($self, $store, $parent_iter, $filter, $status) = @_;
 
     my @folders = eval {
         $self->drive->list(
-            filter => "'$folder_id' in parents "
-                    . "and mimeType='application/vnd.google-apps.folder' "
-                    . "and trashed=false",
+            filter => $filter,
             params => { fields => 'files(id,name)', pageSize => 1000 },
         );
     };
@@ -862,12 +881,13 @@ sub _load_drive_children {
     }
 
     $status->set_text(q{});
+    my $mf = "mimeType='application/vnd.google-apps.folder' and trashed=false";
     for my $f (sort { lc($a->{name}) cmp lc($b->{name}) } @folders) {
         my $iter = $store->append($parent_iter);
-        $store->set($iter, 0, $f->{name}, 1, $f->{id}, 2, FALSE);
-        # Placeholder child makes the row expandable; removed on first expand
+        $store->set($iter, 0, $f->{name}, 1, $f->{id}, 2, FALSE,
+                    3, "'$f->{id}' in parents and $mf");
         my $ph = $store->append($iter);
-        $store->set($ph, 0, 'Loading\x{2026}', 1, q{}, 2, FALSE);
+        $store->set($ph, 0, "Loading\x{2026}", 1, q{}, 2, FALSE, 3, q{});
     }
     if (!@folders && defined $parent_iter) {
         $status->set_text('No subfolders.');

@@ -106,8 +106,12 @@ sub _init_api {
 
     my $auth_cfg = $self->config->auth_config();
     unless ($auth_cfg->{client_id} && $auth_cfg->{client_secret}) {
-        $self->_show_error("Google API credentials not configured.\nPlease edit: " .
-            $self->config->config_file());
+        $self->_show_error(
+            "Google API credentials not configured.\n\n" .
+            "Open File > Settings and enter your OAuth Client ID and Secret.\n\n" .
+            "You can obtain these from the Google Cloud Console under\n" .
+            "APIs & Services > Credentials (OAuth 2.0 Client ID, Desktop app type)."
+        );
         return;
     }
     unless (-f ($auth_cfg->{token_file} // '')) {

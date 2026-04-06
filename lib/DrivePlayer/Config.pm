@@ -26,11 +26,25 @@ has _data => (
 
 sub _build_data {
     my ($self) = @_;
-    my $data = -f $self->config_file
-        ? LoadFile($self->config_file)
-        : $self->_defaults();
+    my $data = $self->_defaults();
+    if (-f $self->config_file) {
+        my $file = LoadFile($self->config_file);
+        _merge($data, $file);
+    }
     _expand_paths($data);
     return $data;
+}
+
+# Recursively merge $src over $dst (scalar/array values in $src win).
+sub _merge {
+    my ($dst, $src) = @_;
+    for my $key (keys %{ $src }) {
+        if (ref $src->{$key} eq 'HASH' && ref $dst->{$key} eq 'HASH') {
+            _merge($dst->{$key}, $src->{$key});
+        } else {
+            $dst->{$key} = $src->{$key};
+        }
+    }
 }
 
 sub _defaults {
@@ -68,6 +82,7 @@ sub save {
 sub ensure_dirs {
     my ($self) = @_;
     for my $path ($self->db_path, $self->log_file, $self->token_file) {
+        next unless defined $path && $path ne '';
         my $dir = dirname($path);
         make_path($dir) unless -d $dir;
     }

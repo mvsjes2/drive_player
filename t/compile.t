@@ -7,11 +7,6 @@ use lib "$FindBin::RealBin/../../../p5-google-restapi/lib";
 use File::Find;
 use Test::More;
 
-# Modules that require system libraries not available in all test environments.
-my %skip = map { $_ => 1 } qw(
-    DrivePlayer::GUI
-);
-
 my @modules;
 my $lib = "$FindBin::RealBin/../lib";
 find(
@@ -26,9 +21,9 @@ find(
     $lib,
 );
 
-my @testable = grep { !$skip{$_} } sort @modules;
-plan tests => scalar @testable;
+my @sorted = sort @modules;
+plan tests => scalar @sorted;
 
-for my $module (@testable) {
+for my $module (@sorted) {
     use_ok($module);
 }

@@ -504,7 +504,7 @@ sub _populate_tracklist {
 
 sub _track_activated {
     my ($self, $view, $path, $col) = @_;
-    my $idx = $path->get_indices()->[0];
+    my ($idx) = $path->get_indices();
     $self->_play_index($idx);
 }
 

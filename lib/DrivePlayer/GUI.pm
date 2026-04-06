@@ -199,6 +199,7 @@ sub _build_menubar {
     # Library menu
     my $lib_menu = Gtk3::Menu->new();
     $self->_add_menu_item($lib_menu, 'Scan All Folders',    sub { $self->_scan_all() });
+    $self->_add_menu_item($lib_menu, 'Scan New Folders',    sub { $self->_scan_new() });
     $self->_add_menu_item($lib_menu, 'Clear Library',       sub { $self->_clear_library() });
     my $lib_item = Gtk3::MenuItem->new_with_label('Library');
     $lib_item->set_submenu($lib_menu);
@@ -608,10 +609,7 @@ sub _sidebar_activated {
         $self->_populate_tracklist($self->db->tracks_by_album($value));
     } elsif ($type eq 'folder') {
         my $sf = $self->db->get_scan_folder_by_drive_id($value) or return;
-        my @tracks = $self->db->all_tracks();
-        @tracks = grep { defined $_->{folder_path} &&
-                         index($_->{folder_path}, $sf->{name}) == 0 } @tracks;
-        $self->_populate_tracklist(@tracks);
+        $self->_populate_tracklist($self->db->tracks_by_scan_folder($sf->{id}));
     }
 
     $self->_set_status(scalar(@{ $self->_playlist }) . ' tracks');
@@ -629,6 +627,30 @@ sub _on_search {
 }
 
 # ---- Scanning ----
+
+sub _scan_new {
+    my ($self) = @_;
+    return unless $self->_init_api();
+
+    my @all = @{ $self->config->music_folders() };
+    unless (@all) {
+        $self->_show_error("No music folders configured.\nUse File → Add Music Folder.");
+        return;
+    }
+
+    my %scanned = map { $_->{drive_id} => 1 } $self->db->all_scan_folders();
+    my @new     = grep { !$scanned{ $_->{id} } } @all;
+
+    unless (@new) {
+        $self->_show_error(
+            "All configured folders have already been scanned.\n"
+          . "Use Library \x{2192} Scan All Folders to rescan."
+        );
+        return;
+    }
+
+    $self->_show_scan_dialog(\@new);
+}
 
 sub _scan_all {
     my ($self) = @_;

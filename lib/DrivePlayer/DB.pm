@@ -177,6 +177,16 @@ sub tracks_by_folder {
         )->all;
 }
 
+sub tracks_by_scan_folder {
+    my ($self, $scan_folder_id) = @_;
+    return map { _row_to_hash($_) }
+        $self->_rs('Track')->search(
+            { 'folder.scan_folder_id' => $scan_folder_id },
+            { join     => 'folder',
+              order_by => \@TRACK_ORDER },
+        )->all;
+}
+
 sub search_tracks {
     my ($self, $query) = @_;
     my $like = "%$query%";

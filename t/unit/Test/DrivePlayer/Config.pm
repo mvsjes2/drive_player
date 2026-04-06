@@ -84,7 +84,7 @@ sub path_expansion : Tests(3) {
 sub auth_config : Tests(3) {
     my ($self) = @_;
 
-    my $cfg = fake_config();
+    my $cfg = fake_config(config_file => '/nonexistent/drive_player/config.yaml');
     my $auth = $cfg->auth_config();
     is ref($auth), 'HASH',        'auth_config returns hashref';
     ok exists $auth->{class},     'auth_config has class key';
@@ -96,7 +96,7 @@ sub auth_config : Tests(3) {
 sub music_folders_accessor : Tests(4) {
     my ($self) = @_;
 
-    my $cfg = fake_config();
+    my $cfg = fake_config(config_file => '/nonexistent/drive_player/config.yaml');
     is scalar(@{ $cfg->music_folders }), 0, 'music_folders empty by default';
 
     $cfg->music_folders([{ id => 'a', name => 'A' }, { id => 'b', name => 'B' }]);
@@ -108,7 +108,7 @@ sub music_folders_accessor : Tests(4) {
 sub add_music_folder : Tests(4) {
     my ($self) = @_;
 
-    my $cfg = fake_config();
+    my $cfg = fake_config(config_file => '/nonexistent/drive_player/config.yaml');
     $cfg->add_music_folder('id1', 'Folder One');
     $cfg->add_music_folder('id2', 'Folder Two');
 
@@ -122,7 +122,7 @@ sub add_music_folder : Tests(4) {
 sub remove_music_folder : Tests(3) {
     my ($self) = @_;
 
-    my $cfg = fake_config();
+    my $cfg = fake_config(config_file => '/nonexistent/drive_player/config.yaml');
     $cfg->add_music_folder('id1', 'Keep');
     $cfg->add_music_folder('id2', 'Remove');
     $cfg->add_music_folder('id3', 'Also Keep');

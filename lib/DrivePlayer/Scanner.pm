@@ -3,8 +3,7 @@ package DrivePlayer::Scanner;
 use DrivePlayer::Setup;
 
 my $FOLDER_MIME  = 'application/vnd.google-apps.folder';
-my $DRIVE_FIELDS = 'files(id,name,mimeType,size,modifiedTime,parents,'
-                 . 'videoMediaMetadata,audioVideoMediaMetadata)';
+my $DRIVE_FIELDS = 'files(id,name,mimeType,size,modifiedTime,parents,videoMediaMetadata)';
 
 has drive => (
     is       => 'ro',
@@ -135,7 +134,7 @@ sub _store_track {
     }
 
     my $duration_ms;
-    if (my $meta = $file->{videoMediaMetadata} || $file->{audioVideoMediaMetadata}) {
+    if (my $meta = $file->{videoMediaMetadata}) {
         $duration_ms = $meta->{durationMillis};
     }
 

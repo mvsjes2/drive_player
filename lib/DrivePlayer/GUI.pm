@@ -57,7 +57,6 @@ has _status_ctx        => ( is => 'rw' );
 
 sub _build_db {
     my ($self) = @_;
-    $self->config->ensure_dirs();
     return DrivePlayer::DB->new(path => $self->config->db_path());
 }
 
@@ -84,6 +83,7 @@ sub run {
 
 sub _init_logging {
     my ($self) = @_;
+    $self->config->ensure_dirs();
     my $level = $self->config->log_level();
     my $file  = $self->config->log_file() // '/tmp/drive_player.log';
 

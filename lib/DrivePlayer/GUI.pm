@@ -263,7 +263,7 @@ sub _build_toolbar {
 sub _build_sidebar {
     my ($self) = @_;
     my $sw = Gtk3::ScrolledWindow->new();
-    $sw->set_policy('never', 'automatic');
+    $sw->set_policy('automatic', 'automatic');
     $sw->set_size_request(100, -1);
 
     # TreeStore: label (str), type (str: 'category'|'artist'|'album'|'folder'),
@@ -277,9 +277,15 @@ sub _build_sidebar {
     $view->signal_connect('row-activated' => sub { $self->_sidebar_activated(@_) });
     $self->sidebar_view($view);
 
+    $view->set_size_request(100, -1);
+
     my $renderer = Gtk3::CellRendererText->new();
+    $renderer->set(ellipsize => 'end');
     my $col = Gtk3::TreeViewColumn->new_with_attributes('', $renderer, text => 0);
+    $col->set_sizing('fixed');
+    $col->set_expand(TRUE);
     $view->append_column($col);
+    $view->set_fixed_height_mode(TRUE);
 
     $sw->add($view);
     return $sw;

@@ -4,7 +4,7 @@ use strict;
 use warnings;
 use HTTP::Tiny;
 use JSON::PP     qw( decode_json );
-use URI::Escape  qw( uri_escape );
+use URI::Escape  qw( uri_escape_utf8 );
 use Time::HiRes  qw( sleep time );
 
 my $USER_AGENT   = 'DrivePlayer/1.0 (https://github.com/mvsjes2/drive_player)';
@@ -34,7 +34,7 @@ sub _fetch_itunes {
 
     # Build a simple keyword query: artist + title works best
     my $term = join(' ', grep { length } $artist, $title);
-    my $url  = $ITUNES_BASE . '?term=' . uri_escape($term)
+    my $url  = $ITUNES_BASE . '?term=' . uri_escape_utf8($term)
              . '&entity=song&media=music&limit=5';
 
     my $data = $self->_get_plain($url) or return;
@@ -104,7 +104,7 @@ sub _fetch_musicbrainz {
     );
 
     for my $query (@attempts) {
-        my $url = "$MB_BASE/recording?query=" . uri_escape($query)
+        my $url = "$MB_BASE/recording?query=" . uri_escape_utf8($query)
                 . '&fmt=json&limit=5&inc=releases+artist-credits+tags';
         my $data = $self->_get_mb($url) or next;
         my $recs = $data->{recordings} or next;

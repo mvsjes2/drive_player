@@ -164,8 +164,8 @@ sub _build_ui {
     $paned->set_position(220);
     $vbox->pack_start($paned, TRUE, TRUE, 0);
 
-    $paned->pack1($self->_build_sidebar(),    FALSE, FALSE);
-    $paned->pack2($self->_build_tracklist(),  TRUE,  TRUE);
+    $paned->pack1($self->_build_sidebar(),   TRUE, TRUE);
+    $paned->pack2($self->_build_tracklist(), TRUE, TRUE);
 
     # Search bar
     $vbox->pack_start($self->_build_searchbar(), FALSE, FALSE, 0);
@@ -264,7 +264,7 @@ sub _build_sidebar {
     my ($self) = @_;
     my $sw = Gtk3::ScrolledWindow->new();
     $sw->set_policy('never', 'automatic');
-    $sw->set_size_request(220, -1);
+    $sw->set_size_request(100, -1);
 
     # TreeStore: label (str), type (str: 'category'|'artist'|'album'|'folder'),
     #            value (str: artist name, album name, folder_id)

@@ -31,7 +31,7 @@ sub _build_data {
         my $file = LoadFile($self->config_file);
         _merge($data, $file);
     }
-    _expand_paths($data);
+    _expand_paths($data, dirname($self->config_file));
     return $data;
 }
 
@@ -64,12 +64,21 @@ sub _defaults {
 }
 
 sub _expand_paths {
-    my ($data) = @_;
+    my ($data, $config_dir) = @_;
     for my $key (qw( log_file )) {
-        $data->{$key} =~ s|^~|$ENV{HOME}| if defined $data->{$key};
+        $data->{$key} = _abs_path($data->{$key}, $config_dir) if defined $data->{$key};
     }
-    $data->{database}{path}    =~ s|^~|$ENV{HOME}| if defined $data->{database}{path};
-    $data->{auth}{token_file}  =~ s|^~|$ENV{HOME}| if defined $data->{auth}{token_file};
+    $data->{database}{path}   = _abs_path($data->{database}{path},   $config_dir)
+        if defined $data->{database}{path};
+    $data->{auth}{token_file} = _abs_path($data->{auth}{token_file}, $config_dir)
+        if defined $data->{auth}{token_file};
+}
+
+sub _abs_path {
+    my ($path, $config_dir) = @_;
+    $path =~ s|^~|$ENV{HOME}|;
+    return File::Spec->rel2abs($path, $config_dir) unless File::Spec->file_name_is_absolute($path);
+    return $path;
 }
 
 sub save {

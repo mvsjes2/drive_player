@@ -817,13 +817,8 @@ sub _add_folder_dialog {
 
 sub _fetch_drive_name {
     my ($self, $folder_id) = @_;
-    my @meta = eval {
-        $self->drive->list(
-            filter => "id='$folder_id'",
-            params => { fields => 'files(id,name)', pageSize => 1 },
-        );
-    };
-    return @meta ? $meta[0]{name} : undef;
+    my $meta = eval { $self->drive->file(id => $folder_id)->get(fields => 'id,name') };
+    return $meta ? $meta->{name} : undef;
 }
 
 sub _browse_folder_dialog {

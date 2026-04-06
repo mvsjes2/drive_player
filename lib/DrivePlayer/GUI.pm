@@ -534,7 +534,7 @@ sub _toggle_play {
         my $sel  = $self->track_view->get_selection();
         my @rows = $sel->get_selected_rows();
         if (@rows) {
-            $self->_play_index($rows[0]->get_indices()->[0]);
+            my ($ridx) = $rows[0]->get_indices(); $self->_play_index($ridx);
         } else {
             $self->_play_index(0);
         }
@@ -1023,7 +1023,7 @@ sub _tracklist_context_menu {
         my $sel  = $self->track_view->get_selection();
         my @rows = $sel->get_selected_rows();
         if (@rows) {
-            $self->_play_index($rows[0]->get_indices()->[0]);
+            my ($ridx) = $rows[0]->get_indices(); $self->_play_index($ridx);
         }
     });
     $menu->append($play_item);

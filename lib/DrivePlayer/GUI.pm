@@ -1047,25 +1047,21 @@ sub _settings_dialog {
 
 sub _tracklist_context_menu {
     my ($self, $event) = @_;
+
+    my ($path) = $self->track_view->get_path_at_pos($event->x, $event->y);
+    return unless $path;
+    $self->track_view->get_selection()->select_path($path);
+    my ($ridx) = $path->get_indices();
+    my $track   = $self->_playlist->[$ridx];
+
     my $menu = Gtk3::Menu->new();
 
     my $play_item = Gtk3::MenuItem->new_with_label('Play');
-    $play_item->signal_connect(activate => sub {
-        my $sel  = $self->track_view->get_selection();
-        my @rows = $sel->get_selected_rows();
-        if (@rows) {
-            my ($ridx) = $rows[0]->get_indices(); $self->_play_index($ridx);
-        }
-    });
+    $play_item->signal_connect(activate => sub { $self->_play_index($ridx) });
     $menu->append($play_item);
 
     my $edit_item = Gtk3::MenuItem->new_with_label('Edit Metadata…');
     $edit_item->signal_connect(activate => sub {
-        my $sel  = $self->track_view->get_selection();
-        my @rows = $sel->get_selected_rows();
-        return unless @rows;
-        my ($ridx) = $rows[0]->get_indices();
-        my $track  = $self->_playlist->[$ridx];
         $self->_edit_metadata_dialog($track) if $track;
     });
     $menu->append($edit_item);

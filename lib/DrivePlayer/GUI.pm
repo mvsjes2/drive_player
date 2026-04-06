@@ -685,12 +685,12 @@ sub _show_scan_dialog {
             my ($msg) = @_;
             $status_lbl->set_text($msg);
             $progress->pulse();
-            Gtk3->main_iteration_do(FALSE) while Gtk3->events_pending();
+            Gtk3::main_iteration_do(FALSE) while Gtk3::events_pending();
         },
         on_track_found => sub {
             $track_count++;
             $count_lbl->set_text("$track_count tracks found");
-            Gtk3->main_iteration_do(FALSE) while Gtk3->events_pending();
+            Gtk3::main_iteration_do(FALSE) while Gtk3::events_pending();
         },
     );
     $self->scanner($scanner);
@@ -706,7 +706,7 @@ sub _show_scan_dialog {
         $current++;
         $status_lbl->set_text("Scanning folder $current/$total: $folder->{name}");
         $progress->set_fraction($current / ($total + 1));
-        Gtk3->main_iteration_do(FALSE) while Gtk3->events_pending();
+        Gtk3::main_iteration_do(FALSE) while Gtk3::events_pending();
 
         eval {
             $scanner->scan_folder($folder->{id}, $folder->{name});
@@ -716,7 +716,7 @@ sub _show_scan_dialog {
 
     $progress->set_fraction(1.0);
     $status_lbl->set_text("Done. $track_count tracks found.");
-    Gtk3->main_iteration_do(FALSE) while Gtk3->events_pending();
+    Gtk3::main_iteration_do(FALSE) while Gtk3::events_pending();
     sleep 1;
 
     $dlg->destroy();

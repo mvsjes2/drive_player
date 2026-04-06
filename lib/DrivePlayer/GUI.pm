@@ -781,6 +781,18 @@ sub _add_folder_dialog {
     $name_entry->set_hexpand(TRUE);
     $grid->attach($name_entry, 1, 1, 1, 1);
 
+    # When a Drive URL is pasted, extract the folder ID and look up its name.
+    $id_entry->signal_connect(changed => sub {
+        my $text = $id_entry->get_text();
+        if (my ($extracted) = $text =~ m{drive\.google\.com/\S*?/([a-zA-Z0-9_-]{25,})}x) {
+            $id_entry->set_text($extracted);   # triggers changed again with bare ID — no-op second time
+            if ($name_entry->get_text() eq '') {
+                my $name = $self->_fetch_drive_name($extracted);
+                $name_entry->set_text($name) if $name;
+            }
+        }
+    });
+
     $browse_btn->signal_connect(clicked => sub {
         if (my $folder = $self->_browse_folder_dialog($dlg)) {
             $id_entry->set_text($folder->{id});
@@ -801,6 +813,17 @@ sub _add_folder_dialog {
         }
     }
     $dlg->destroy();
+}
+
+sub _fetch_drive_name {
+    my ($self, $folder_id) = @_;
+    my @meta = eval {
+        $self->drive->list(
+            filter => "id='$folder_id'",
+            params => { fields => 'files(id,name)', pageSize => 1 },
+        );
+    };
+    return @meta ? $meta[0]{name} : undef;
 }
 
 sub _browse_folder_dialog {

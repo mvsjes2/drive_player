@@ -10,6 +10,7 @@ use Google::RestApi;
 use Google::RestApi::DriveApi3;
 use DrivePlayer::Config;
 use DrivePlayer::DB;
+use DrivePlayer::MetadataFetcher;
 use DrivePlayer::Player;
 use DrivePlayer::Scanner;
 
@@ -198,9 +199,12 @@ sub _build_menubar {
 
     # Library menu
     my $lib_menu = Gtk3::Menu->new();
-    $self->_add_menu_item($lib_menu, 'Scan All Folders',    sub { $self->_scan_all() });
-    $self->_add_menu_item($lib_menu, 'Scan New Folders',    sub { $self->_scan_new() });
-    $self->_add_menu_item($lib_menu, 'Clear Library',       sub { $self->_clear_library() });
+    $self->_add_menu_item($lib_menu, 'Scan All Folders',       sub { $self->_scan_all() });
+    $self->_add_menu_item($lib_menu, 'Scan New Folders',       sub { $self->_scan_new() });
+    $lib_menu->append(Gtk3::SeparatorMenuItem->new());
+    $self->_add_menu_item($lib_menu, 'Fetch All Metadata',     sub { $self->_fetch_all_metadata() });
+    $lib_menu->append(Gtk3::SeparatorMenuItem->new());
+    $self->_add_menu_item($lib_menu, 'Clear Library',          sub { $self->_clear_library() });
     my $lib_item = Gtk3::MenuItem->new_with_label('Library');
     $lib_item->set_submenu($lib_menu);
     $mb->append($lib_item);
@@ -1066,8 +1070,115 @@ sub _tracklist_context_menu {
     });
     $menu->append($edit_item);
 
+    my $fetch_item = Gtk3::MenuItem->new_with_label('Fetch Metadata…');
+    $fetch_item->signal_connect(activate => sub {
+        $self->_fetch_track_metadata($track) if $track;
+    });
+    $menu->append($fetch_item);
+
     $menu->show_all();
     $menu->popup_at_pointer($event);
+}
+
+sub _fetch_track_metadata {
+    my ($self, $track) = @_;
+    $self->_set_status('Looking up metadata…');
+    Gtk3::main_iteration_do(FALSE) while Gtk3::events_pending();
+
+    my $fetcher = DrivePlayer::MetadataFetcher->new();
+    my $meta = $fetcher->fetch(
+        title  => $track->{title},
+        artist => $track->{artist},
+        album  => $track->{album},
+    );
+
+    unless ($meta) {
+        $self->_set_status('No MusicBrainz match found.');
+        return;
+    }
+
+    # Merge fetched data over existing track for display in editor
+    my %merged = (%$track, %$meta);
+    $self->_edit_metadata_dialog(\%merged);
+    $self->_set_status(q{});
+}
+
+sub _fetch_all_metadata {
+    my ($self) = @_;
+
+    my @tracks = $self->db->all_tracks();
+    unless (@tracks) {
+        $self->_show_error('Library is empty.');
+        return;
+    }
+
+    my $dlg = Gtk3::Dialog->new_with_buttons(
+        'Fetching Metadata', $self->win,
+        [qw/ modal destroy-with-parent /],
+        'Stop', 'cancel',
+    );
+    $dlg->set_default_size(420, 130);
+
+    my $vbox = Gtk3::Box->new('vertical', 8);
+    $vbox->set_border_width(12);
+    $dlg->get_content_area()->pack_start($vbox, TRUE, TRUE, 0);
+
+    my $status_lbl = Gtk3::Label->new('Starting…');
+    $status_lbl->set_xalign(0.0);
+    $status_lbl->set_ellipsize('middle');
+    $vbox->pack_start($status_lbl, FALSE, FALSE, 0);
+
+    my $progress = Gtk3::ProgressBar->new();
+    $vbox->pack_start($progress, FALSE, FALSE, 0);
+
+    my $count_lbl = Gtk3::Label->new('0 updated');
+    $count_lbl->set_xalign(0.0);
+    $vbox->pack_start($count_lbl, FALSE, FALSE, 0);
+
+    $dlg->show_all();
+
+    my $stopped  = FALSE;
+    my $updated  = 0;
+    my $total    = scalar @tracks;
+    my $fetcher  = DrivePlayer::MetadataFetcher->new();
+
+    $dlg->signal_connect(response => sub { $stopped = TRUE });
+
+    my $i = 0;
+    for my $track (@tracks) {
+        last if $stopped;
+        $i++;
+        $progress->set_fraction($i / $total);
+        $status_lbl->set_text("$i/$total: $track->{title}");
+        Gtk3::main_iteration_do(FALSE) while Gtk3::events_pending();
+
+        my $meta = $fetcher->fetch(
+            title  => $track->{title},
+            artist => $track->{artist},
+            album  => $track->{album},
+        );
+        next unless $meta;
+
+        # Only overwrite fields that are currently blank
+        my %update;
+        for my $key (qw( artist album year genre )) {
+            next if $track->{$key} && length $track->{$key};
+            $update{$key} = $meta->{$key} if $meta->{$key};
+        }
+        if (%update) {
+            $self->db->update_track_metadata($track->{id}, %update);
+            $updated++;
+            $count_lbl->set_text("$updated updated");
+        }
+        Gtk3::main_iteration_do(FALSE) while Gtk3::events_pending();
+    }
+
+    $status_lbl->set_text("Done. $updated of $total tracks updated.");
+    $progress->set_fraction(1.0);
+    Gtk3::main_iteration_do(FALSE) while Gtk3::events_pending();
+    sleep 1;
+    $dlg->destroy();
+    $self->_load_library();
 }
 
 sub _edit_metadata_dialog {

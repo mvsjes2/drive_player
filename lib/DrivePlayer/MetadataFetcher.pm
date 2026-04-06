@@ -5,7 +5,7 @@ use warnings;
 use HTTP::Tiny;
 use JSON::PP     qw( decode_json );
 use URI::Escape  qw( uri_escape_utf8 );
-use Time::HiRes  qw( sleep time );
+use Time::HiRes  qw( sleep time usleep );
 
 my $USER_AGENT   = 'DrivePlayer/1.0 (https://github.com/mvsjes2/drive_player)';
 my $ITUNES_BASE  = 'https://itunes.apple.com/search';
@@ -14,7 +14,10 @@ my $MB_MIN_GAP   = 1.1;   # MusicBrainz rate limit: 1 req/sec
 
 my $last_mb_req  = 0;
 
-sub new { return bless {}, shift }
+sub new {
+    my ($class, %args) = @_;
+    return bless { yield => $args{yield} }, $class;
+}
 
 # Try iTunes first (better fuzzy matching, no rate limit); fall back to MusicBrainz.
 sub fetch {
@@ -152,7 +155,7 @@ sub _best_mb_release {
 
 sub _get_plain {
     my ($self, $url) = @_;
-    my $ua  = HTTP::Tiny->new(agent => $USER_AGENT, timeout => 10);
+    my $ua  = HTTP::Tiny->new(agent => $USER_AGENT, timeout => 5);
     my $res = $ua->get($url);
     return unless $res->{success};
     return eval { decode_json($res->{content}) };
@@ -161,9 +164,25 @@ sub _get_plain {
 sub _get_mb {
     my ($self, $url) = @_;
     my $gap = $MB_MIN_GAP - (time() - $last_mb_req);
-    sleep($gap) if $gap > 0;
+    $self->_yield_sleep($gap) if $gap > 0;
     $last_mb_req = time();
     return $self->_get_plain($url);
+}
+
+# Sleep for $secs, calling the yield callback every 50 ms so the caller
+# can process events (e.g. GTK main loop) while waiting.
+sub _yield_sleep {
+    my ($self, $secs) = @_;
+    my $yield = $self->{yield};
+    if ($yield) {
+        my $end = time() + $secs;
+        while (time() < $end) {
+            $yield->();
+            usleep(50_000);
+        }
+    } else {
+        sleep($secs);
+    }
 }
 
 sub _mb_escape {

@@ -1140,7 +1140,9 @@ sub _fetch_all_metadata {
     my $stopped  = FALSE;
     my $updated  = 0;
     my $total    = scalar @tracks;
-    my $fetcher  = DrivePlayer::MetadataFetcher->new();
+
+    my $yield = sub { Gtk3::main_iteration_do(FALSE) while Gtk3::events_pending() };
+    my $fetcher = DrivePlayer::MetadataFetcher->new(yield => $yield);
 
     $dlg->signal_connect(response => sub { $stopped = TRUE });
 
@@ -1150,13 +1152,13 @@ sub _fetch_all_metadata {
         $i++;
         $progress->set_fraction($i / $total);
         $status_lbl->set_text("$i/$total: $track->{title}");
-        Gtk3::main_iteration_do(FALSE) while Gtk3::events_pending();
+        $yield->();
 
-        my $meta = $fetcher->fetch(
+        my $meta = eval { $fetcher->fetch(
             title  => $track->{title},
             artist => $track->{artist},
             album  => $track->{album},
-        );
+        ) };
         next unless $meta;
 
         # Only overwrite fields that are currently blank
@@ -1173,10 +1175,12 @@ sub _fetch_all_metadata {
         Gtk3::main_iteration_do(FALSE) while Gtk3::events_pending();
     }
 
-    $status_lbl->set_text("Done. $updated of $total tracks updated.");
+    $status_lbl->set_text(
+        $stopped ? "Stopped. $updated updated so far."
+                 : "Done. $updated of $total tracks updated."
+    );
     $progress->set_fraction(1.0);
-    Gtk3::main_iteration_do(FALSE) while Gtk3::events_pending();
-    sleep 1;
+    $fetcher->_yield_sleep(1.5);
     $dlg->destroy();
     $self->_load_library();
 }

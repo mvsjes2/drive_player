@@ -59,7 +59,7 @@ sub fetch_by_fingerprint {
     my $drive_id = $args{drive_id} or return;
 
     return unless $self->{acoustid_key} && $self->{token_fn};
-    return unless _fpcalc_available();
+    return unless fpcalc_available();
 
     my $tmpfile = $self->_download_partial($drive_id) or return;
     my $fp      = _fingerprint($tmpfile);
@@ -224,9 +224,12 @@ sub _mb_q {
 # AcoustID
 # ------------------------------------------------------------------
 
-sub _fpcalc_available {
+sub fpcalc_available {
     return -x '/usr/bin/fpcalc' || -x '/usr/local/bin/fpcalc';
 }
+
+# Keep private alias for internal calls
+sub _fpcalc_available { fpcalc_available() }
 
 sub _download_partial {
     my ($self, $drive_id) = @_;

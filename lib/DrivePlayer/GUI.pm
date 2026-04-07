@@ -5,6 +5,7 @@ package DrivePlayer::GUI;
 use DrivePlayer::Setup;
 use Glib            qw( TRUE FALSE );
 use Gtk3            '-init';
+use POSIX           qw( WNOHANG );
 
 use Google::RestApi;
 use Google::RestApi::DriveApi3;
@@ -1016,13 +1017,20 @@ sub _settings_dialog {
         'Save',   'ok',
         'Cancel', 'cancel',
     );
-    $dlg->set_default_size(500, 295);
+    $dlg->set_default_size(520, -1);
 
+    my $vbox = $dlg->get_content_area();
+    $vbox->set_spacing(0);
+
+    # ---- Google API credentials ----
+    my $auth_frame = Gtk3::Frame->new('Google API Credentials');
+    $auth_frame->set_border_width(8);
     my $grid = Gtk3::Grid->new();
     $grid->set_row_spacing(8);
     $grid->set_column_spacing(8);
-    $grid->set_border_width(12);
-    $dlg->get_content_area()->add($grid);
+    $grid->set_border_width(8);
+    $auth_frame->add($grid);
+    $vbox->pack_start($auth_frame, FALSE, FALSE, 0);
 
     my $row = 0;
     my %entries;
@@ -1032,7 +1040,9 @@ sub _settings_dialog {
         ['token_file',    'Token File:'],
     ) {
         my ($key, $lbl) = @$field;
-        $grid->attach(Gtk3::Label->new($lbl), 0, $row, 1, 1);
+        my $lbl_w = Gtk3::Label->new($lbl);
+        $lbl_w->set_xalign(1.0);
+        $grid->attach($lbl_w, 0, $row, 1, 1);
         my $e = Gtk3::Entry->new();
         $e->set_hexpand(TRUE);
         $e->set_text($self->config->auth_config()->{$key} // '');
@@ -1042,20 +1052,118 @@ sub _settings_dialog {
         $row++;
     }
 
-    $grid->attach(Gtk3::Label->new('AcoustID API Key:'), 0, $row, 1, 1);
+    # ---- Acoustic fingerprinting ----
+    my $fp_frame = Gtk3::Frame->new('Acoustic Fingerprinting (AcoustID)');
+    $fp_frame->set_border_width(8);
+    my $fp_grid = Gtk3::Grid->new();
+    $fp_grid->set_row_spacing(8);
+    $fp_grid->set_column_spacing(8);
+    $fp_grid->set_border_width(8);
+    $fp_frame->add($fp_grid);
+    $vbox->pack_start($fp_frame, FALSE, FALSE, 0);
+
+    # fpcalc status row
+    my $fp_lbl = Gtk3::Label->new('fpcalc:');
+    $fp_lbl->set_xalign(1.0);
+    $fp_grid->attach($fp_lbl, 0, 0, 1, 1);
+
+    my $fp_status = Gtk3::Label->new();
+    $fp_status->set_xalign(0.0);
+
+    my $install_btn = Gtk3::Button->new_with_label('Install…');
+    $install_btn->set_tooltip_text(
+        'Installs libchromaprint-tools via apt (requires administrator password)'
+    );
+
+    my $fp_hbox = Gtk3::Box->new('horizontal', 8);
+    $fp_hbox->pack_start($fp_status,    FALSE, FALSE, 0);
+    $fp_hbox->pack_start($install_btn,  FALSE, FALSE, 0);
+    $fp_grid->attach($fp_hbox, 1, 0, 1, 1);
+
+    # Helper: refresh the fpcalc status label
+    my $refresh_fp_status = sub {
+        if (DrivePlayer::MetadataFetcher::fpcalc_available()) {
+            $fp_status->set_markup('<span foreground="#2d862d"><b>Installed</b></span>');
+            $install_btn->hide();
+        }
+        else {
+            $fp_status->set_markup(
+                '<span foreground="#cc0000">Not installed</span>'
+                . '  <span size="small" foreground="#666666">'
+                . '(needed for fingerprint-based lookup)</span>'
+            );
+            $install_btn->show();
+        }
+    };
+    $refresh_fp_status->();
+
+    $install_btn->signal_connect(clicked => sub {
+        $install_btn->set_sensitive(FALSE);
+        $fp_status->set_markup('<span foreground="#666666">Installing…</span>');
+        Gtk3::main_iteration_do(FALSE) while Gtk3::events_pending();
+
+        my $pid = fork();
+        if (!defined $pid) {
+            $fp_status->set_markup('<span foreground="#cc0000">Fork failed</span>');
+            $install_btn->set_sensitive(TRUE);
+            return;
+        }
+        if ($pid == 0) {
+            exec('pkexec', 'apt-get', 'install', '-y', 'libchromaprint-tools')
+                or POSIX::_exit(1);
+        }
+
+        # Poll every 500 ms until the child exits
+        Glib::Timeout->add(500, sub {
+            my $res = waitpid($pid, WNOHANG());
+            if ($res == $pid) {
+                $refresh_fp_status->();
+                $install_btn->set_sensitive(TRUE);
+                return FALSE;   # remove timer
+            }
+            return TRUE;        # keep polling
+        });
+    });
+
+    # AcoustID API key
+    my $aid_lbl = Gtk3::Label->new('AcoustID API Key:');
+    $aid_lbl->set_xalign(1.0);
+    $fp_grid->attach($aid_lbl, 0, 1, 1, 1);
+
     my $aid_entry = Gtk3::Entry->new();
     $aid_entry->set_hexpand(TRUE);
     $aid_entry->set_text($self->config->acoustid_key());
-    $grid->attach($aid_entry, 1, $row, 1, 1);
-    $row++;
+    $aid_entry->set_placeholder_text('Get a free key at acoustid.org');
+    $fp_grid->attach($aid_entry, 1, 1, 1, 1);
 
-    $grid->attach(Gtk3::Label->new('Config file:'), 0, $row, 1, 1);
+    my $aid_note = Gtk3::Label->new();
+    $aid_note->set_markup(
+        '<span size="small" foreground="#555555">'
+        . 'Register a free application at <b>acoustid.org</b> to obtain a key.</span>'
+    );
+    $aid_note->set_xalign(0.0);
+    $aid_note->set_line_wrap(TRUE);
+    $fp_grid->attach($aid_note, 1, 2, 1, 1);
+
+    # ---- Config file path (informational) ----
+    my $info_grid = Gtk3::Grid->new();
+    $info_grid->set_row_spacing(4);
+    $info_grid->set_column_spacing(8);
+    $info_grid->set_border_width(8);
+    $vbox->pack_start($info_grid, FALSE, FALSE, 0);
+
+    my $cfg_key = Gtk3::Label->new('Config file:');
+    $cfg_key->set_xalign(1.0);
+    $info_grid->attach($cfg_key, 0, 0, 1, 1);
     my $cfg_lbl = Gtk3::Label->new($self->config->config_file());
     $cfg_lbl->set_xalign(0.0);
     $cfg_lbl->set_selectable(TRUE);
-    $grid->attach($cfg_lbl, 1, $row, 1, 1);
+    $info_grid->attach($cfg_lbl, 1, 0, 1, 1);
 
     $dlg->show_all();
+    # Re-apply visibility after show_all (show_all overrides hide())
+    $refresh_fp_status->();
+
     my $response = $dlg->run();
 
     if ($response eq 'ok') {

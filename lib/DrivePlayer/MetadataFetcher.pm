@@ -40,8 +40,8 @@ sub last_fp_stage { $_[0]->{_fp_stage} }
 sub fetch {
     my ($self, %args) = @_;
     my $title  = $args{title}  or return;
-    my $artist = $args{artist} // '';
-    my $album  = $args{album}  // '';
+    my $artist = _clean_field($args{artist} // '');
+    my $album  = _clean_field($args{album}  // '');
 
     $log->debug("Text search: title='$title' artist='$artist'") if $log;
 
@@ -119,6 +119,14 @@ sub fetch_by_fingerprint {
 # Title cleaning
 # ------------------------------------------------------------------
 
+sub _clean_field {
+    my ($s) = @_;
+    $s =~ s/_/ /g;
+    $s =~ s/\s+/ /g;
+    $s =~ s/^\s+|\s+$//g;
+    return $s;
+}
+
 sub _clean_title {
     my ($t) = @_;
 
@@ -142,10 +150,7 @@ sub _clean_title {
     );
     for my $re (@strip) { $t =~ s/$re//g }
 
-    $t =~ s/_/ /g;
-    $t =~ s/\s+/ /g;
-    $t =~ s/^\s+|\s+$//g;
-    return $t;
+    return _clean_field($t);
 }
 
 # ------------------------------------------------------------------

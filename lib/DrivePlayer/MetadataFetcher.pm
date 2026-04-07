@@ -279,7 +279,10 @@ sub _fpcalc_available { fpcalc_available() }
 sub _download_partial {
     my ($self, $drive_id) = @_;
     my $token = $self->{token_fn}->();
-    return unless $token;
+    unless ($token) {
+        $log->warn("Fingerprint: no bearer token available") if $log;
+        return;
+    }
 
     my $url     = sprintf $DRIVE_URL, uri_escape_utf8($drive_id);
     my $max     = $DOWNLOAD_MB * 1024 * 1024 - 1;
@@ -296,7 +299,12 @@ sub _download_partial {
     });
     close $fh;
 
-    return $tmpfile if $res->{success} || ($res->{status} == 206);
+    if ($res->{success} || $res->{status} == 206) {
+        $log->debug("Fingerprint: downloaded " . (-s $tmpfile) . " bytes for drive_id=$drive_id") if $log;
+        return $tmpfile;
+    }
+
+    $log->warn("Fingerprint: HTTP $res->{status} downloading drive_id=$drive_id: $res->{reason}") if $log;
     unlink $tmpfile;
     return;
 }

@@ -2,115 +2,176 @@ package DrivePlayer::MetadataFetcher;
 
 use strict;
 use warnings;
+use File::Temp   qw( tempfile );
 use HTTP::Tiny;
 use JSON::PP     qw( decode_json );
 use URI::Escape  qw( uri_escape_utf8 );
 use Time::HiRes  qw( sleep time usleep );
 
-my $USER_AGENT   = 'DrivePlayer/1.0 (https://github.com/mvsjes2/drive_player)';
-my $ITUNES_BASE  = 'https://itunes.apple.com/search';
-my $MB_BASE      = 'https://musicbrainz.org/ws/2';
-my $MB_MIN_GAP   = 1.1;   # MusicBrainz rate limit: 1 req/sec
+my $USER_AGENT  = 'DrivePlayer/1.0 (https://github.com/mvsjes2/drive_player)';
+my $ITUNES_BASE = 'https://itunes.apple.com/search';
+my $MB_BASE     = 'https://musicbrainz.org/ws/2';
+my $AID_BASE    = 'https://api.acoustid.org/v2/lookup';
+my $DRIVE_URL   = 'https://www.googleapis.com/drive/v3/files/%s?alt=media';
+my $MB_MIN_GAP  = 1.1;
+my $DOWNLOAD_MB = 5;   # MB to download for fingerprinting
 
-my $last_mb_req  = 0;
+my $last_mb_req = 0;
 
 sub new {
     my ($class, %args) = @_;
-    return bless { yield => $args{yield} }, $class;
+    return bless {
+        yield        => $args{yield},
+        acoustid_key => $args{acoustid_key} // '',
+        token_fn     => $args{token_fn},
+    }, $class;
 }
 
-# Try iTunes first (better fuzzy matching, no rate limit); fall back to MusicBrainz.
+# ------------------------------------------------------------------
+# Public: text-based lookup (iTunes -> MusicBrainz, with title cleaning)
+# ------------------------------------------------------------------
+
 sub fetch {
     my ($self, %args) = @_;
     my $title  = $args{title}  or return;
     my $artist = $args{artist} // '';
     my $album  = $args{album}  // '';
 
-    return $self->_fetch_itunes($title, $artist, $album)
-        // $self->_fetch_musicbrainz($title, $artist, $album);
+    # 1. Try with original values
+    my $meta = $self->_fetch_itunes($title, $artist, $album)
+            // $self->_fetch_musicbrainz($title, $artist, $album);
+    return $meta if $meta;
+
+    # 2. Try with cleaned title
+    my $clean = _clean_title($title);
+    return if $clean eq $title;   # nothing changed, no point retrying
+
+    return $self->_fetch_itunes($clean, $artist, $album)
+        // $self->_fetch_musicbrainz($clean, $artist, $album);
 }
 
-# ---------- iTunes ----------
+# ------------------------------------------------------------------
+# Public: AcoustID fingerprint lookup
+# ------------------------------------------------------------------
+
+sub fetch_by_fingerprint {
+    my ($self, %args) = @_;
+    my $drive_id = $args{drive_id} or return;
+
+    return unless $self->{acoustid_key} && $self->{token_fn};
+    return unless _fpcalc_available();
+
+    my $tmpfile = $self->_download_partial($drive_id) or return;
+    my $fp      = _fingerprint($tmpfile);
+    unlink $tmpfile;
+    return unless $fp;
+
+    my $aid = $self->_query_acoustid($fp) or return;
+    return $self->_fetch_musicbrainz_by_id($aid);
+}
+
+# ------------------------------------------------------------------
+# Title cleaning
+# ------------------------------------------------------------------
+
+sub _clean_title {
+    my ($t) = @_;
+
+    # Strip leading track number: "01.", "01 -", "(01)", "[01]", "01 "
+    $t =~ s/^\s*[\(\[]?\d{1,3}[\)\]]?[\s.\-]+//;
+
+    # Strip feat/ft/featuring/with credits
+    $t =~ s/\s*[\(\[](feat|ft|featuring|with)\.?\s+[^\)\]]+[\)\]]//ig;
+    $t =~ s/\s+(feat|ft|featuring)\s+.+$//ig;
+
+    # Strip common parenthetical junk (order matters: specific before generic)
+    my @strip = (
+        qr/\s*[\(\[]\s*(?:\d{4}\s+)?(?:digital\s+)?remaster(?:ed)?(?:\s+\d{4})?\s*[\)\]]/i,
+        qr/\s*[\(\[]\s*live(?:\s+at\s+[^\)\]]+)?\s*[\)\]]/i,
+        qr/\s*[\(\[]\s*(?:official\s+)?(?:audio|video|lyric\s+video|music\s+video)\s*[\)\]]/i,
+        qr/\s*[\(\[]\s*(?:radio|single|album|extended|original|instrumental|acoustic|demo|mono|stereo)\s+(?:edit|version|mix|take)?\s*[\)\]]/i,
+        qr/\s*[\(\[]\s*(?:explicit|clean|censored)\s*[\)\]]/i,
+        qr/\s*[\(\[]\s*(?:hd|hq|\d+hz|\d+\s*hz|4k)\s*[\)\]]/i,
+        qr/\s*-\s*(?:single|ep|soundtrack)\s*$/i,
+        qr/\s*[\(\[]\s*(?:19|20)\d{2}\s*[\)\]]/,
+    );
+    for my $re (@strip) { $t =~ s/$re//g }
+
+    $t =~ s/\s+/ /g;
+    $t =~ s/^\s+|\s+$//g;
+    return $t;
+}
+
+# ------------------------------------------------------------------
+# iTunes
+# ------------------------------------------------------------------
 
 sub _fetch_itunes {
     my ($self, $title, $artist, $album) = @_;
 
-    # Build a simple keyword query: artist + title works best
     my $term = join(' ', grep { length } $artist, $title);
     my $url  = $ITUNES_BASE . '?term=' . uri_escape_utf8($term)
              . '&entity=song&media=music&limit=5';
 
-    my $data = $self->_get_plain($url) or return;
-    my $results = $data->{results} or return;
+    my $data    = $self->_get_plain($url) or return;
+    my $results = $data->{results}        or return;
     return unless @$results;
 
-    # Pick the result whose title and artist best match what we have
     my $best = _best_itunes_match($results, $title, $artist, $album);
     return unless $best;
 
     my %meta;
-    $meta{title}        = $best->{trackName}        if $best->{trackName};
-    $meta{artist}       = $best->{artistName}        if $best->{artistName};
-    $meta{album}        = $best->{collectionName}    if $best->{collectionName};
-    $meta{genre}        = $best->{primaryGenreName}  if $best->{primaryGenreName};
-    $meta{track_number} = $best->{trackNumber}       if $best->{trackNumber};
+    $meta{title}        = $best->{trackName}       if $best->{trackName};
+    $meta{artist}       = $best->{artistName}       if $best->{artistName};
+    $meta{album}        = $best->{collectionName}   if $best->{collectionName};
+    $meta{genre}        = $best->{primaryGenreName} if $best->{primaryGenreName};
+    $meta{track_number} = $best->{trackNumber}      if $best->{trackNumber};
     ($meta{year})       = ($best->{releaseDate} // '') =~ /^(\d{4})/;
-
     return \%meta;
 }
 
 sub _best_itunes_match {
     my ($results, $want_title, $want_artist, $want_album) = @_;
-
     my $score = sub {
         my ($r) = @_;
         my $s = 0;
-        $s += 3 if $want_title  && _fuzzy_match($r->{trackName},     $want_title);
-        $s += 2 if $want_artist && _fuzzy_match($r->{artistName},     $want_artist);
-        $s += 1 if $want_album  && _fuzzy_match($r->{collectionName}, $want_album);
+        $s += 3 if $want_title  && _fuzzy($r->{trackName},     $want_title);
+        $s += 2 if $want_artist && _fuzzy($r->{artistName},     $want_artist);
+        $s += 1 if $want_album  && _fuzzy($r->{collectionName}, $want_album);
         return $s;
     };
-
     my ($best) = sort { $score->($b) <=> $score->($a) } @$results;
-
-    # Require at least a title match
-    return unless $want_title && _fuzzy_match($best->{trackName}, $want_title);
+    return unless $want_title && _fuzzy($best->{trackName}, $want_title);
     return $best;
 }
 
-# Case-insensitive substring / word match
-sub _fuzzy_match {
-    my ($haystack, $needle) = @_;
-    return unless defined $haystack && defined $needle && length $needle;
-    return index(lc($haystack), lc($needle)) >= 0
-        || index(lc($needle), lc($haystack)) >= 0;
+sub _fuzzy {
+    my ($hay, $needle) = @_;
+    return unless defined $hay && defined $needle && length $needle;
+    return index(lc($hay), lc($needle)) >= 0
+        || index(lc($needle), lc($hay)) >= 0;
 }
 
-# ---------- MusicBrainz ----------
+# ------------------------------------------------------------------
+# MusicBrainz (text search, fuzzy, progressive relaxation)
+# ------------------------------------------------------------------
 
 sub _fetch_musicbrainz {
     my ($self, $title, $artist, $album) = @_;
 
-    # Use fuzzy (~) matching and progressively relax constraints
-    my @attempts = (
-        # Most specific: title + artist + album (fuzzy)
-        ( $artist && $album
-            ? 'recording:' . _mb_escape($title) . '~ AND artist:'
-              . _mb_escape($artist) . '~ AND release:' . _mb_escape($album) . '~'
-            : () ),
-        # title + artist
-        ( $artist
-            ? 'recording:' . _mb_escape($title) . '~ AND artist:' . _mb_escape($artist) . '~'
-            : () ),
-        # title only
-        'recording:' . _mb_escape($title) . '~',
-    );
+    my @attempts;
+    push @attempts, 'recording:' . _mb_q($title) . '~ AND artist:' . _mb_q($artist)
+                  . '~ AND release:' . _mb_q($album) . '~'
+        if $artist && $album;
+    push @attempts, 'recording:' . _mb_q($title) . '~ AND artist:' . _mb_q($artist) . '~'
+        if $artist;
+    push @attempts, 'recording:' . _mb_q($title) . '~';
 
     for my $query (@attempts) {
         my $url = "$MB_BASE/recording?query=" . uri_escape_utf8($query)
                 . '&fmt=json&limit=5&inc=releases+artist-credits+tags';
         my $data = $self->_get_mb($url) or next;
-        my $recs = $data->{recordings} or next;
+        my $recs = $data->{recordings}  or next;
         next unless @$recs;
         my $meta = _parse_mb($recs->[0]);
         return $meta if $meta && %$meta;
@@ -118,29 +179,31 @@ sub _fetch_musicbrainz {
     return;
 }
 
+sub _fetch_musicbrainz_by_id {
+    my ($self, $mb_id) = @_;
+    my $url  = "$MB_BASE/recording/$mb_id?fmt=json&inc=releases+artist-credits+tags";
+    my $rec  = $self->_get_mb($url) or return;
+    return _parse_mb($rec);
+}
+
 sub _parse_mb {
     my ($rec) = @_;
     my %meta;
-
     $meta{title} = $rec->{title} if $rec->{title};
-
     if (my $credits = $rec->{'artist-credit'}) {
         $meta{artist} = join(', ',
-            map { $_->{name} // $_->{artist}{name} // () }
+            map  { $_->{name} // $_->{artist}{name} // () }
             grep { ref $_ eq 'HASH' } @$credits
         );
     }
-
-    if (my $release = _best_mb_release($rec->{releases} // [])) {
-        $meta{album} = $release->{title};
-        ($meta{year}) = ($release->{date} // '') =~ /^(\d{4})/;
+    if (my $rel = _best_mb_release($rec->{releases} // [])) {
+        $meta{album} = $rel->{title};
+        ($meta{year}) = ($rel->{date} // '') =~ /^(\d{4})/;
     }
-
     if (my $tags = $rec->{tags}) {
         my ($top) = sort { $b->{count} <=> $a->{count} } @$tags;
         $meta{genre} = ucfirst($top->{name}) if $top;
     }
-
     return \%meta;
 }
 
@@ -151,7 +214,79 @@ sub _best_mb_release {
     return @dated ? $dated[0] : $releases->[0];
 }
 
-# ---------- HTTP ----------
+sub _mb_q {
+    my ($s) = @_;
+    $s =~ s/["\\+\-&|!(){}\[\]^~*?:\/]/\\$&/g;
+    return $s;
+}
+
+# ------------------------------------------------------------------
+# AcoustID
+# ------------------------------------------------------------------
+
+sub _fpcalc_available {
+    return -x '/usr/bin/fpcalc' || -x '/usr/local/bin/fpcalc';
+}
+
+sub _download_partial {
+    my ($self, $drive_id) = @_;
+    my $token = $self->{token_fn}->();
+    return unless $token;
+
+    my $url     = sprintf $DRIVE_URL, uri_escape_utf8($drive_id);
+    my $max     = $DOWNLOAD_MB * 1024 * 1024 - 1;
+    my $ua      = HTTP::Tiny->new(agent => $USER_AGENT, timeout => 30);
+    my ($fh, $tmpfile) = tempfile(SUFFIX => '.audio', UNLINK => 0);
+    binmode $fh;
+
+    my $res = $ua->request('GET', $url, {
+        headers       => {
+            Authorization => $token,
+            Range         => "bytes=0-$max",
+        },
+        data_callback => sub { print {$fh} $_[0] },
+    });
+    close $fh;
+
+    return $tmpfile if $res->{success} || ($res->{status} == 206);
+    unlink $tmpfile;
+    return;
+}
+
+sub _fingerprint {
+    my ($tmpfile) = @_;
+    my $fpcalc = -x '/usr/bin/fpcalc' ? '/usr/bin/fpcalc' : 'fpcalc';
+    my $json   = qx($fpcalc -json -length 120 \Q$tmpfile\E 2>/dev/null);
+    return unless $json;
+    my $data = eval { decode_json($json) } or return;
+    return unless $data->{fingerprint} && $data->{duration};
+    return { fingerprint => $data->{fingerprint}, duration => int($data->{duration}) };
+}
+
+sub _query_acoustid {
+    my ($self, $fp) = @_;
+    my $url = $AID_BASE
+            . '?client='      . uri_escape_utf8($self->{acoustid_key})
+            . '&meta=recordings+compress'
+            . '&duration='    . $fp->{duration}
+            . '&fingerprint=' . uri_escape_utf8($fp->{fingerprint});
+
+    my $data    = $self->_get_plain($url) or return;
+    my $results = $data->{results}        or return;
+    return unless @$results;
+
+    # Pick the result with the highest score
+    my ($best) = sort { $b->{score} <=> $a->{score} } @$results;
+    return unless $best->{score} && $best->{score} > 0.5;
+
+    my $recordings = $best->{recordings} or return;
+    return unless @$recordings;
+    return $recordings->[0]{id};
+}
+
+# ------------------------------------------------------------------
+# HTTP helpers
+# ------------------------------------------------------------------
 
 sub _get_plain {
     my ($self, $url) = @_;
@@ -169,8 +304,6 @@ sub _get_mb {
     return $self->_get_plain($url);
 }
 
-# Sleep for $secs, calling the yield callback every 50 ms so the caller
-# can process events (e.g. GTK main loop) while waiting.
 sub _yield_sleep {
     my ($self, $secs) = @_;
     my $yield = $self->{yield};
@@ -185,56 +318,80 @@ sub _yield_sleep {
     }
 }
 
-sub _mb_escape {
-    my ($s) = @_;
-    $s =~ s/["\\+\-&|!(){}\[\]^~*?:\/]/\\$&/g;
-    return $s;
-}
-
 1;
 
 __END__
 
 =head1 NAME
 
-DrivePlayer::MetadataFetcher - Fetch track metadata from iTunes and MusicBrainz
+DrivePlayer::MetadataFetcher - Fetch track metadata from iTunes, MusicBrainz, and AcoustID
 
 =head1 SYNOPSIS
 
   use DrivePlayer::MetadataFetcher;
 
-  my $fetcher = DrivePlayer::MetadataFetcher->new();
-  my $meta = $fetcher->fetch(
-      title  => 'Come Together',
-      artist => 'The Beatles',   # optional but improves accuracy
-      album  => 'Abbey Road',    # optional
+  my $fetcher = DrivePlayer::MetadataFetcher->new(
+      yield        => sub { ... },          # optional: pump GTK events during waits
+      acoustid_key => 'YOUR_KEY',           # optional: enables fingerprint lookup
+      token_fn     => sub { 'Bearer ...' }, # optional: required for fingerprinting
   );
-  # $meta = { title=>, artist=>, album=>, year=>, genre=>, track_number=> }
+
+  # Text-based lookup (iTunes first, MusicBrainz fallback, with title cleaning)
+  my $meta = $fetcher->fetch(title => 'Come Together', artist => 'Beatles');
+
+  # Acoustic fingerprint lookup (requires fpcalc + AcoustID key)
+  my $meta = $fetcher->fetch_by_fingerprint(drive_id => $id);
 
 =head1 DESCRIPTION
 
-Queries the iTunes Search API first (good fuzzy matching, no rate limit,
-returns genre directly) then falls back to MusicBrainz (better for
-classical and non-commercial music).
+Tries multiple strategies in order to find metadata for a track:
 
-MusicBrainz requests are rate-limited to one per second as required.
-iTunes requests are unrestricted.
+=over 4
 
-Only C<title> is required.  Supplying C<artist> and/or C<album> improves
-match accuracy.
+=item 1.
+
+iTunes Search API with original title/artist (fuzzy, no rate limit).
+
+=item 2.
+
+MusicBrainz with original title/artist (fuzzy ~ operator, progressive relaxation).
+
+=item 3.
+
+Both sources again with a cleaned title (track numbers, remaster tags, feat.
+credits, and other common junk stripped).
+
+=item 4.
+
+AcoustID acoustic fingerprinting via C<fpcalc>: downloads the first 5 MB of
+the Drive file, generates a Chromaprint fingerprint, queries AcoustID, then
+fetches full metadata from MusicBrainz.  Requires C<acoustid_key> and
+C<token_fn> to be set, and C<fpcalc> to be installed
+(C<sudo apt install libchromaprint-tools>).
+
+=back
 
 =head1 METHODS
 
 =head2 new
 
-  my $fetcher = DrivePlayer::MetadataFetcher->new();
+  my $f = DrivePlayer::MetadataFetcher->new(%args);
+
+Optional args: C<yield> (CodeRef), C<acoustid_key> (Str), C<token_fn> (CodeRef
+returning a Bearer token string).
 
 =head2 fetch
 
-  my $hashref = $fetcher->fetch(title => $t, artist => $a, album => $al);
+  my $hashref = $f->fetch(title => $t, artist => $a, album => $al);
 
-Returns a hashref with any subset of: C<title>, C<artist>, C<album>,
-C<year>, C<genre>, C<track_number>.  Returns C<undef> on failure or
-no match found in either source.
+Returns a hashref with any of: C<title artist album year genre track_number>.
+Returns C<undef> on no match.
+
+=head2 fetch_by_fingerprint
+
+  my $hashref = $f->fetch_by_fingerprint(drive_id => $id);
+
+Identifies the track by acoustic fingerprint.  Returns C<undef> if fpcalc
+is not installed, no AcoustID key is configured, or no match is found.
 
 =cut

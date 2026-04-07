@@ -60,6 +60,7 @@ sub _defaults {
         database      => { path => $DEFAULT_DB_PATH },
         log_level     => 'WARN',
         log_file      => $DEFAULT_LOG_FILE,
+        acoustid_key  => '',
     };
 }
 
@@ -119,10 +120,11 @@ sub remove_music_folder {
     ];
 }
 
-sub db_path    { $_[0]->_data->{database}{path} }
-sub log_level  { $_[0]->_data->{log_level} // 'WARN' }
-sub log_file   { $_[0]->_data->{log_file} }
-sub token_file { $_[0]->_data->{auth}{token_file} }
+sub db_path      { $_[0]->_data->{database}{path} }
+sub log_level    { $_[0]->_data->{log_level} // 'WARN' }
+sub log_file     { $_[0]->_data->{log_file} }
+sub token_file   { $_[0]->_data->{auth}{token_file} }
+sub acoustid_key { $_[0]->_data->{acoustid_key} // '' }
 
 1;
 

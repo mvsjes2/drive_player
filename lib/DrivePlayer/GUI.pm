@@ -56,6 +56,13 @@ has search_entry       => ( is => 'rw' );
 has statusbar          => ( is => 'rw' );
 has _status_ctx        => ( is => 'rw' );
 
+sub _bearer_token {
+    my ($self) = @_;
+    return unless $self->rest_api;
+    my %h = @{ $self->rest_api->auth->headers() };
+    return $h{Authorization};
+}
+
 sub _build_db {
     my ($self) = @_;
     return DrivePlayer::DB->new(path => $self->config->db_path());
@@ -1009,7 +1016,7 @@ sub _settings_dialog {
         'Save',   'ok',
         'Cancel', 'cancel',
     );
-    $dlg->set_default_size(500, 260);
+    $dlg->set_default_size(500, 295);
 
     my $grid = Gtk3::Grid->new();
     $grid->set_row_spacing(8);
@@ -1035,6 +1042,13 @@ sub _settings_dialog {
         $row++;
     }
 
+    $grid->attach(Gtk3::Label->new('AcoustID API Key:'), 0, $row, 1, 1);
+    my $aid_entry = Gtk3::Entry->new();
+    $aid_entry->set_hexpand(TRUE);
+    $aid_entry->set_text($self->config->acoustid_key());
+    $grid->attach($aid_entry, 1, $row, 1, 1);
+    $row++;
+
     $grid->attach(Gtk3::Label->new('Config file:'), 0, $row, 1, 1);
     my $cfg_lbl = Gtk3::Label->new($self->config->config_file());
     $cfg_lbl->set_xalign(0.0);
@@ -1049,6 +1063,7 @@ sub _settings_dialog {
         for my $key (keys %entries) {
             $auth->{$key} = $entries{$key}->get_text();
         }
+        $self->config->_data->{acoustid_key} = $aid_entry->get_text();
         $self->config->save();
         $self->_set_status('Settings saved. Restart to apply API credential changes.');
     }
@@ -1091,7 +1106,10 @@ sub _fetch_track_metadata {
     $self->_set_status('Looking up metadata…');
     Gtk3::main_iteration_do(FALSE) while Gtk3::events_pending();
 
-    my $fetcher = DrivePlayer::MetadataFetcher->new();
+    my $fetcher = DrivePlayer::MetadataFetcher->new(
+        acoustid_key => $self->config->acoustid_key(),
+        token_fn     => sub { $self->_bearer_token() },
+    );
     my $meta = $fetcher->fetch(
         title  => $track->{title},
         artist => $track->{artist},
@@ -1099,11 +1117,16 @@ sub _fetch_track_metadata {
     );
 
     unless ($meta) {
-        $self->_set_status('No MusicBrainz match found.');
+        $self->_set_status('Text search failed, trying fingerprint…');
+        Gtk3::main_iteration_do(FALSE) while Gtk3::events_pending();
+        $meta = eval { $fetcher->fetch_by_fingerprint(drive_id => $track->{drive_id}) };
+    }
+
+    unless ($meta) {
+        $self->_set_status('No match found.');
         return;
     }
 
-    # Merge fetched data over existing track for display in editor
     my %merged = (%$track, %$meta);
     $self->_edit_metadata_dialog(\%merged);
     $self->_set_status(q{});
@@ -1148,7 +1171,13 @@ sub _fetch_all_metadata {
     my $total    = scalar @tracks;
 
     my $yield = sub { Gtk3::main_iteration_do(FALSE) while Gtk3::events_pending() };
-    my $fetcher = DrivePlayer::MetadataFetcher->new(yield => $yield);
+    my $fetcher = DrivePlayer::MetadataFetcher->new(
+        yield        => $yield,
+        acoustid_key => $self->config->acoustid_key(),
+        token_fn     => sub { $self->_bearer_token() },
+    );
+    my $use_fingerprint = $self->config->acoustid_key()
+                       && DrivePlayer::MetadataFetcher::_fpcalc_available();
 
     $dlg->signal_connect(response => sub { $stopped = TRUE });
 
@@ -1165,7 +1194,14 @@ sub _fetch_all_metadata {
             artist => $track->{artist},
             album  => $track->{album},
         ) };
-        next unless $meta;
+
+        unless ($meta) {
+            next unless $use_fingerprint;
+            $status_lbl->set_text("$i/$total (fingerprinting): $track->{title}");
+            $yield->();
+            $meta = eval { $fetcher->fetch_by_fingerprint(drive_id => $track->{drive_id}) };
+            next unless $meta;
+        }
 
         # Only overwrite fields that are currently blank
         my %update;

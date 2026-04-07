@@ -142,6 +142,7 @@ sub _clean_title {
     );
     for my $re (@strip) { $t =~ s/$re//g }
 
+    $t =~ s/_/ /g;
     $t =~ s/\s+/ /g;
     $t =~ s/^\s+|\s+$//g;
     return $t;

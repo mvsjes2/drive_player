@@ -24,8 +24,12 @@ sub new {
         yield        => $args{yield},
         acoustid_key => $args{acoustid_key} // '',
         token_fn     => $args{token_fn},
+        _fp_stage    => undef,
     }, $class;
 }
+
+# Returns a short description of where the last fingerprint lookup stopped.
+sub last_fp_stage { $_[0]->{_fp_stage} }
 
 # ------------------------------------------------------------------
 # Public: text-based lookup (iTunes -> MusicBrainz, with title cleaning)
@@ -57,17 +61,37 @@ sub fetch {
 sub fetch_by_fingerprint {
     my ($self, %args) = @_;
     my $drive_id = $args{drive_id} or return;
+    $self->{_fp_stage} = undef;
 
     return unless $self->{acoustid_key} && $self->{token_fn};
     return unless fpcalc_available();
 
-    my $tmpfile = $self->_download_partial($drive_id) or return;
-    my $fp      = _fingerprint($tmpfile);
-    unlink $tmpfile;
-    return unless $fp;
+    $self->{_fp_stage} = 'downloading audio';
+    my $tmpfile = $self->_download_partial($drive_id);
+    unless ($tmpfile) {
+        $self->{_fp_stage} = 'download failed (token expired or Drive error)';
+        return;
+    }
 
-    my $aid = $self->_query_acoustid($fp) or return;
-    return $self->_fetch_musicbrainz_by_id($aid);
+    $self->{_fp_stage} = 'running fpcalc';
+    my $fp = _fingerprint($tmpfile);
+    unlink $tmpfile;
+    unless ($fp) {
+        $self->{_fp_stage} = 'fpcalc produced no fingerprint';
+        return;
+    }
+
+    $self->{_fp_stage} = 'querying AcoustID';
+    my $aid = $self->_query_acoustid($fp);
+    unless ($aid) {
+        $self->{_fp_stage} = 'no AcoustID match (score too low or track unknown)';
+        return;
+    }
+
+    $self->{_fp_stage} = 'fetching MusicBrainz metadata';
+    my $meta = $self->_fetch_musicbrainz_by_id($aid);
+    $self->{_fp_stage} = $meta ? undef : 'MusicBrainz returned no data';
+    return $meta;
 }
 
 # ------------------------------------------------------------------

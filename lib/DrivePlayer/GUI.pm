@@ -1211,10 +1211,14 @@ sub _tracklist_context_menu {
 
 sub _fetch_track_metadata {
     my ($self, $track) = @_;
+
+    my $yield = sub { Gtk3::main_iteration_do(FALSE) while Gtk3::events_pending() };
+
     $self->_set_status('Looking up metadata…');
-    Gtk3::main_iteration_do(FALSE) while Gtk3::events_pending();
+    $yield->();
 
     my $fetcher = DrivePlayer::MetadataFetcher->new(
+        yield        => $yield,
         acoustid_key => $self->config->acoustid_key(),
         token_fn     => sub { $self->_bearer_token() },
     );
@@ -1225,14 +1229,30 @@ sub _fetch_track_metadata {
     );
 
     unless ($meta) {
-        $self->_set_status('Text search failed, trying fingerprint…');
-        Gtk3::main_iteration_do(FALSE) while Gtk3::events_pending();
-        $meta = eval { $fetcher->fetch_by_fingerprint(drive_id => $track->{drive_id}) };
-    }
+        my $key      = $self->config->acoustid_key();
+        my $have_fp  = DrivePlayer::MetadataFetcher::fpcalc_available();
 
-    unless ($meta) {
-        $self->_set_status('No match found.');
-        return;
+        if (!$key) {
+            $self->_set_status('Text search: no match. Fingerprinting skipped: no AcoustID key set.');
+            return;
+        }
+        if (!$have_fp) {
+            $self->_set_status('Text search: no match. Fingerprinting skipped: fpcalc not installed.');
+            return;
+        }
+
+        $self->_set_status('Text search: no match. Downloading audio for fingerprinting…');
+        $yield->();
+        my $err;
+        $meta = eval { $fetcher->fetch_by_fingerprint(drive_id => $track->{drive_id}) };
+        $err  = $@ if $@;
+
+        unless ($meta) {
+            my $reason = $err ? "error: $err"
+                               : $fetcher->last_fp_stage() // 'no match found';
+            $self->_set_status("Fingerprint lookup: $reason");
+            return;
+        }
     }
 
     my %merged = (%$track, %$meta);
@@ -1305,7 +1325,7 @@ sub _fetch_all_metadata {
 
         unless ($meta) {
             next unless $use_fingerprint;
-            $status_lbl->set_text("$i/$total (fingerprinting): $track->{title}");
+            $status_lbl->set_text("$i/$total [downloading]: $track->{title}");
             $yield->();
             $meta = eval { $fetcher->fetch_by_fingerprint(drive_id => $track->{drive_id}) };
             next unless $meta;

@@ -8,6 +8,8 @@ use JSON::PP     qw( decode_json );
 use URI::Escape  qw( uri_escape_utf8 );
 use Time::HiRes  qw( sleep time usleep );
 
+my $log = do { eval { require Log::Log4perl; Log::Log4perl->get_logger(__PACKAGE__) } };
+
 my $USER_AGENT  = 'DrivePlayer/1.0 (https://github.com/mvsjes2/drive_player)';
 my $ITUNES_BASE = 'https://itunes.apple.com/search';
 my $MB_BASE     = 'https://musicbrainz.org/ws/2';
@@ -41,17 +43,28 @@ sub fetch {
     my $artist = $args{artist} // '';
     my $album  = $args{album}  // '';
 
+    $log->debug("Text search: title='$title' artist='$artist'") if $log;
+
     # 1. Try with original values
     my $meta = $self->_fetch_itunes($title, $artist, $album)
             // $self->_fetch_musicbrainz($title, $artist, $album);
-    return $meta if $meta;
+    if ($meta) {
+        $log->debug("Text search hit for '$title'") if $log;
+        return $meta;
+    }
 
     # 2. Try with cleaned title
     my $clean = _clean_title($title);
-    return if $clean eq $title;   # nothing changed, no point retrying
+    if ($clean eq $title) {
+        $log->debug("Text search miss for '$title' (no clean variant)") if $log;
+        return;
+    }
 
-    return $self->_fetch_itunes($clean, $artist, $album)
-        // $self->_fetch_musicbrainz($clean, $artist, $album);
+    $log->debug("Retrying with cleaned title '$clean'") if $log;
+    $meta = $self->_fetch_itunes($clean, $artist, $album)
+         // $self->_fetch_musicbrainz($clean, $artist, $album);
+    $log->debug($meta ? "Text search hit (cleaned) for '$title'" : "Text search miss for '$title'") if $log;
+    return $meta;
 }
 
 # ------------------------------------------------------------------
@@ -67,30 +80,38 @@ sub fetch_by_fingerprint {
     return unless fpcalc_available();
 
     $self->{_fp_stage} = 'downloading audio';
+    $log->info("Fingerprint: downloading audio for drive_id=$drive_id") if $log;
     my $tmpfile = $self->_download_partial($drive_id);
     unless ($tmpfile) {
         $self->{_fp_stage} = 'download failed (token expired or Drive error)';
+        $log->warn("Fingerprint: download failed for drive_id=$drive_id") if $log;
         return;
     }
 
     $self->{_fp_stage} = 'running fpcalc';
+    $log->debug("Fingerprint: running fpcalc on $tmpfile") if $log;
     my $fp = _fingerprint($tmpfile);
     unlink $tmpfile;
     unless ($fp) {
         $self->{_fp_stage} = 'fpcalc produced no fingerprint';
+        $log->warn("Fingerprint: fpcalc produced no output for drive_id=$drive_id") if $log;
         return;
     }
 
     $self->{_fp_stage} = 'querying AcoustID';
+    $log->debug("Fingerprint: querying AcoustID (duration=$fp->{duration}s)") if $log;
     my $aid = $self->_query_acoustid($fp);
     unless ($aid) {
         $self->{_fp_stage} = 'no AcoustID match (score too low or track unknown)';
+        $log->info("Fingerprint: no AcoustID match for drive_id=$drive_id") if $log;
         return;
     }
 
     $self->{_fp_stage} = 'fetching MusicBrainz metadata';
+    $log->info("Fingerprint: AcoustID matched MusicBrainz recording $aid") if $log;
     my $meta = $self->_fetch_musicbrainz_by_id($aid);
     $self->{_fp_stage} = $meta ? undef : 'MusicBrainz returned no data';
+    $log->info($meta ? "Fingerprint: metadata found for drive_id=$drive_id" : "Fingerprint: MusicBrainz returned no data for $aid") if $log;
     return $meta;
 }
 

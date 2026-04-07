@@ -1240,6 +1240,10 @@ sub _fetch_track_metadata {
             $self->_set_status('Text search: no match. Fingerprinting skipped: fpcalc not installed.');
             return;
         }
+        unless ($self->_init_api()) {
+            $self->_set_status('Text search: no match. Fingerprinting skipped: Google API not initialised.');
+            return;
+        }
 
         $self->_set_status('Text search: no match. Downloading audio for fingerprinting…');
         $yield->();
@@ -1305,7 +1309,8 @@ sub _fetch_all_metadata {
         token_fn     => sub { $self->_bearer_token() },
     );
     my $use_fingerprint = $self->config->acoustid_key()
-                       && DrivePlayer::MetadataFetcher::_fpcalc_available();
+                       && DrivePlayer::MetadataFetcher::fpcalc_available()
+                       && $self->_init_api();
 
     $dlg->signal_connect(response => sub { $stopped = TRUE });
 

@@ -4,9 +4,10 @@ use strict;
 use warnings;
 use Google::RestApi::SheetsApi4;
 
-# Columns stored in each worksheet.  Tracks only carries metadata fields;
-# structural fields (folder_id, duration_ms, etc.) come from Drive scanning.
-my @SF_COLS    = qw( drive_id name );
+# Columns for the scan_folders index worksheet.
+my @SF_COLS = qw( drive_id name );
+
+# Metadata columns written to each per-folder worksheet.
 my @TRACK_COLS = qw( drive_id title artist album track_number year genre composer comment );
 
 # ------------------------------------------------------------------
@@ -17,37 +18,26 @@ sub new {
     my ($class, %args) = @_;
     return bless {
         api            => $args{api},              # Google::RestApi instance
-        spreadsheet_id => $args{spreadsheet_id},   # may be undef before create()
+        spreadsheet_id => $args{spreadsheet_id},   # undef before create()
     }, $class;
 }
 
 sub spreadsheet_id { $_[0]->{spreadsheet_id} }
 
 # ------------------------------------------------------------------
-# Connect / Create
+# Create
 # ------------------------------------------------------------------
 
-# Open an existing spreadsheet by ID and ensure both worksheets exist.
-sub connect {
-    my ($self) = @_;
-    my $ss = $self->_sheets_api->open_spreadsheet(id => $self->{spreadsheet_id});
-    $self->_ensure_worksheet($ss, 'scan_folders');
-    $self->_ensure_worksheet($ss, 'tracks');
-    return $ss;
-}
-
-# Create a brand-new spreadsheet and return its ID (also stored in $self).
+# Create a new spreadsheet and return its ID (also stored in $self).
+# The default "Sheet1" is renamed to "scan_folders"; folder worksheets
+# are created on first push.
 sub create {
     my ($self) = @_;
     my $ss = $self->_sheets_api->create_spreadsheet(title => 'DrivePlayer Library');
     $self->{spreadsheet_id} = $ss->spreadsheet_id();
 
-    # The API creates a default "Sheet1"; rename it to scan_folders.
     my $ws0 = $ss->open_worksheet(id => 0);
-    $ws0->rename_worksheet('scan_folders');
-
-    # Add the tracks worksheet.
-    $ss->add_worksheet(name => 'tracks');
+    $ws0->ws_rename('scan_folders');
     $ss->submit_requests();
 
     return $self->{spreadsheet_id};
@@ -57,53 +47,68 @@ sub create {
 # Push  (SQLite → Sheet)
 # ------------------------------------------------------------------
 
+# Write all scan folders and their tracks to the spreadsheet.
+# Each scan folder gets its own worksheet named after the folder.
+# Returns { scan_folders => N, tracks => N }.
 sub push_to_sheet {
     my ($self, $db) = @_;
     my $ss = $self->_open();
 
-    # scan_folders
-    my @sf_rows = map { [$_->{drive_id}, $_->{name}] }
-                  $db->all_scan_folders();
+    my @scan_folders = $db->all_scan_folders();
+
+    # Write the scan_folders index tab
+    my @sf_rows = map { [$_->{drive_id}, $_->{name}] } @scan_folders;
     $self->_write_worksheet($ss, 'scan_folders', \@SF_COLS, \@sf_rows);
 
-    # tracks (metadata columns only)
-    my @track_rows = map { my $t = $_;
-                           [map { $t->{$_} // '' } @TRACK_COLS] }
-                     $db->all_tracks();
-    $self->_write_worksheet($ss, 'tracks', \@TRACK_COLS, \@track_rows);
+    # Write one worksheet per scan folder
+    my $total_tracks = 0;
+    for my $sf (@scan_folders) {
+        my @tracks     = $db->tracks_by_scan_folder($sf->{id});
+        my @track_rows = map { my $t = $_;
+                               [map { $t->{$_} // '' } @TRACK_COLS] } @tracks;
+        $self->_write_worksheet($ss, _ws_name($sf->{name}), \@TRACK_COLS, \@track_rows);
+        $total_tracks += scalar @tracks;
+    }
 
-    return { scan_folders => scalar @sf_rows, tracks => scalar @track_rows };
+    return { scan_folders => scalar @scan_folders, tracks => $total_tracks };
 }
 
 # ------------------------------------------------------------------
 # Pull  (Sheet → SQLite)
 # ------------------------------------------------------------------
 
+# Read the spreadsheet and apply it to the local SQLite DB.
+# Scan folders are upserted; track metadata is only applied to tracks
+# that already exist in SQLite (i.e. have been scanned locally).
+# Returns { scan_folders => N, tracks => N }.
 sub pull_from_sheet {
     my ($self, $db) = @_;
     my $ss = $self->_open();
 
-    # scan_folders — upsert all rows
-    my $sf_rows    = $self->_read_worksheet($ss, 'scan_folders');
-    my $sf_count   = 0;
+    # Pull scan_folders index
+    my $sf_rows  = $self->_read_worksheet($ss, 'scan_folders');
+    my $sf_count = 0;
     for my $row (@$sf_rows) {
         next unless $row->{drive_id} && $row->{name};
         $db->upsert_scan_folder($row->{drive_id}, $row->{name});
         $sf_count++;
     }
 
-    # tracks — only update metadata for tracks already in SQLite
-    my $track_rows   = $self->_read_worksheet($ss, 'tracks');
-    my $track_count  = 0;
-    for my $row (@$track_rows) {
-        next unless $row->{drive_id};
-        my $track = $db->get_track_by_drive_id($row->{drive_id}) or next;
-        $db->update_track_metadata($track->{id},
-            map  { $_ => $row->{$_} }
-            grep { defined $row->{$_} && $row->{$_} ne '' }
-            @TRACK_COLS
-        );
-        $track_count++;
+    # Pull tracks from each folder worksheet
+    my $track_count = 0;
+    for my $sf_row (@$sf_rows) {
+        next unless $sf_row->{name};
+        my $rows = $self->_read_worksheet($ss, _ws_name($sf_row->{name}));
+        for my $row (@$rows) {
+            next unless $row->{drive_id};
+            my $track = $db->get_track_by_drive_id($row->{drive_id}) or next;
+            $db->update_track_metadata($track->{id},
+                map  { $_ => $row->{$_} }
+                grep { defined $row->{$_} && $row->{$_} ne '' }
+                @TRACK_COLS
+            );
+            $track_count++;
+        }
     }
 
     return { scan_folders => $sf_count, tracks => $track_count };
@@ -131,32 +136,26 @@ sub _write_worksheet {
 
     $ws->range_all()->clear();
 
-    my @data = ([@$cols], @$rows);
-    my $n_rows = scalar @data;
-    my $n_cols = scalar @$cols;
-    my $end_col = _col_letter($n_cols);
-
-    my $range = $ws->range("A1:${end_col}${n_rows}");
-    $range->values(values => \@data);
+    my @data    = ([@$cols], @$rows);
+    my $n_rows  = scalar @data;
+    my $end_col = _col_letter(scalar @$cols);
+    $ws->range("A1:${end_col}${n_rows}")->values(values => \@data);
 }
 
-# Read a worksheet, return arrayref of hashrefs keyed by header row.
+# Read a worksheet and return arrayref of hashrefs keyed by header row.
+# Returns [] if the worksheet doesn't exist or is empty.
 sub _read_worksheet {
     my ($self, $ss, $name) = @_;
-    my $ws = eval { $ss->open_worksheet(name => $name) }
-        or return [];
+    my $ws = eval { $ss->open_worksheet(name => $name) } or return [];
 
-    my $all    = eval { $ws->range_all()->values() }
-        or return [];
+    my $all = eval { $ws->range_all()->values() } or return [];
     return [] unless @$all;
 
     my @header = @{ shift @$all };
     my @result;
     for my $row (@$all) {
         my %rec;
-        for my $i (0 .. $#header) {
-            $rec{ $header[$i] } = $row->[$i] // '';
-        }
+        $rec{ $header[$_] } = $row->[$_] // '' for 0 .. $#header;
         push @result, \%rec;
     }
     return \@result;
@@ -172,10 +171,20 @@ sub _ensure_worksheet {
     return $ss->open_worksheet(name => $name);
 }
 
-# Convert a 1-based column number to a letter (1→A, 2→B, …, 26→Z).
+# Sanitise a folder name for use as a worksheet tab name.
+# Google Sheets forbids [ ] * / \ ? : and limits names to 100 chars.
+sub _ws_name {
+    my ($name) = @_;
+    $name =~ s{[\[\]*\/\\?:]}{}g;
+    $name =~ s/^\s+|\s+$//g;
+    $name = 'Folder' unless length $name;
+    return substr($name, 0, 100);
+}
+
+# Convert a 1-based column number to a letter (1→A … 26→Z).
 sub _col_letter {
     my ($n) = @_;
-    return chr(64 + $n);   # works for up to 26 columns
+    return chr(64 + $n);
 }
 
 1;
@@ -191,69 +200,63 @@ DrivePlayer::SheetDB - Sync the DrivePlayer library to/from a Google Sheet
   use DrivePlayer::SheetDB;
 
   my $sheet = DrivePlayer::SheetDB->new(
-      api            => $google_rest_api,   # Google::RestApi instance
-      spreadsheet_id => $id,                # undef if creating for first time
+      api            => $google_rest_api,
+      spreadsheet_id => $id,             # omit when calling create()
   );
 
-  # First time: create the spreadsheet
-  my $new_id = $sheet->create();
-
-  # Push local SQLite data to the sheet
-  my $counts = $sheet->push_to_sheet($db);   # { scan_folders => N, tracks => N }
-
-  # Pull sheet data into local SQLite
-  my $counts = $sheet->pull_from_sheet($db); # { scan_folders => N, tracks => N }
+  my $id     = $sheet->create();             # create spreadsheet, returns ID
+  my $counts = $sheet->push_to_sheet($db);  # { scan_folders => N, tracks => N }
+  my $counts = $sheet->pull_from_sheet($db);
 
 =head1 DESCRIPTION
 
-Uses L<Google::RestApi::SheetsApi4> to maintain a Google Spreadsheet with
-two worksheets:
+Maintains a Google Spreadsheet with one worksheet per scan folder, plus a
+C<scan_folders> index tab:
 
 =over 4
 
 =item scan_folders
 
-C<drive_id> and C<name> of each top-level folder that has been added to the
-library.  Pulling this on a new device tells it which Drive folders to scan.
+C<drive_id> and C<name> for every top-level folder in the library.
 
-=item tracks
+=item One tab per folder (named after the folder)
 
-Metadata columns only: C<drive_id title artist album track_number year genre
-composer comment>.  Structural fields (folder_id, duration_ms, etc.) are
-re-derived by scanning Drive on each device.
+Track metadata columns: C<drive_id title artist album track_number year
+genre composer comment>.  Structural fields (folder_id, duration_ms, etc.)
+are re-derived from Drive scanning and are not stored in the sheet.
 
 =back
 
-The local SQLite database (L<DrivePlayer::DB>) remains the working store;
-all runtime queries use it.  The Sheet is a portable sync target.
+The local SQLite database remains the working store for all runtime queries.
+The Sheet is a portable sync target accessible from any device with Drive access.
+
+=head1 NEW DEVICE WORKFLOW
+
+  1. File -> Sync from Sheet   # pulls scan_folders into SQLite
+  2. Library -> Scan           # discovers audio files on Drive
+  3. File -> Sync from Sheet   # applies saved metadata to the scanned tracks
 
 =head1 METHODS
 
 =head2 new(%args)
 
-Required: C<api> (L<Google::RestApi> instance).
-Optional: C<spreadsheet_id> (omit when calling C<create()>).
+C<api> (L<Google::RestApi> instance) is required.
+C<spreadsheet_id> is optional (omit before calling C<create()>).
 
 =head2 create()
 
-Creates a new Google Spreadsheet titled "DrivePlayer Library", sets up the
-two worksheets, stores and returns the new spreadsheet ID.
-
-=head2 connect()
-
-Opens the existing spreadsheet by C<spreadsheet_id> and ensures the two
-worksheets exist.  Dies if the ID is not set or the sheet is not accessible.
+Creates a new "DrivePlayer Library" spreadsheet with a C<scan_folders> tab.
+Returns and stores the new spreadsheet ID.
 
 =head2 push_to_sheet($db)
 
-Writes all scan folders and track metadata from C<$db> to the sheet,
-replacing whatever was there before.  Returns C<{ scan_folders => N, tracks => N }>.
+Writes the C<scan_folders> index and one worksheet of track metadata per
+folder, replacing whatever was there before.
 
 =head2 pull_from_sheet($db)
 
-Reads the sheet and upserts scan folders into C<$db>.  For tracks, only
-updates rows that already exist in SQLite (keyed by C<drive_id>); tracks not
-yet discovered by a local scan are silently skipped.
-Returns C<{ scan_folders => N, tracks => N }>.
+Upserts scan folders into SQLite and applies track metadata to any tracks
+already present (keyed by C<drive_id>).  Tracks not yet scanned locally
+are silently skipped.
 
 =cut

@@ -14,6 +14,7 @@ use DrivePlayer::DB;
 use DrivePlayer::MetadataFetcher;
 use DrivePlayer::Player;
 use DrivePlayer::Scanner;
+use DrivePlayer::SheetDB;
 
 Readonly my $POLL_INTERVAL_MS => 500;
 
@@ -197,6 +198,9 @@ sub _build_menubar {
     my $file_menu = Gtk3::Menu->new();
     $self->_add_menu_item($file_menu, 'Add Music Folder…',  sub { $self->_add_folder_dialog() });
     $self->_add_menu_item($file_menu, 'Manage Folders…',    sub { $self->_manage_folders_dialog() });
+    $file_menu->append(Gtk3::SeparatorMenuItem->new());
+    $self->_add_menu_item($file_menu, 'Sync to Sheet',      sub { $self->_sync_to_sheet() });
+    $self->_add_menu_item($file_menu, 'Sync from Sheet',    sub { $self->_sync_from_sheet() });
     $file_menu->append(Gtk3::SeparatorMenuItem->new());
     $self->_add_menu_item($file_menu, 'Settings…',          sub { $self->_settings_dialog() });
     $file_menu->append(Gtk3::SeparatorMenuItem->new());
@@ -774,6 +778,7 @@ sub _show_scan_dialog {
 
     $dlg->destroy();
     $self->_load_library();
+    $self->_auto_sync_to_sheet() if $track_count > 0;
 }
 
 # ---- Dialogs ----
@@ -1145,6 +1150,57 @@ sub _settings_dialog {
     $aid_note->set_line_wrap(TRUE);
     $fp_grid->attach($aid_note, 1, 2, 1, 1);
 
+    # ---- Google Sheet sync ----
+    my $sheet_frame = Gtk3::Frame->new('Google Sheet Sync');
+    $sheet_frame->set_border_width(8);
+    my $sheet_grid = Gtk3::Grid->new();
+    $sheet_grid->set_row_spacing(8);
+    $sheet_grid->set_column_spacing(8);
+    $sheet_grid->set_border_width(8);
+    $sheet_frame->add($sheet_grid);
+    $vbox->pack_start($sheet_frame, FALSE, FALSE, 0);
+
+    my $sid_lbl = Gtk3::Label->new('Spreadsheet ID:');
+    $sid_lbl->set_xalign(1.0);
+    $sheet_grid->attach($sid_lbl, 0, 0, 1, 1);
+
+    my $sid_box = Gtk3::Box->new('horizontal', 6);
+    my $sid_entry = Gtk3::Entry->new();
+    $sid_entry->set_hexpand(TRUE);
+    $sid_entry->set_text($self->config->sheet_id());
+    $sid_entry->set_placeholder_text('Paste spreadsheet ID, or click Create');
+    $sid_box->pack_start($sid_entry, TRUE, TRUE, 0);
+
+    my $create_btn = Gtk3::Button->new_with_label('Create New…');
+    $create_btn->set_tooltip_text('Create a new Google Sheet in your Drive');
+    $create_btn->signal_connect(clicked => sub {
+        return unless $self->_init_api();
+        $create_btn->set_sensitive(FALSE);
+        $create_btn->set_label('Creating…');
+        Gtk3::main_iteration_do(FALSE) while Gtk3::events_pending();
+
+        my $sheet = DrivePlayer::SheetDB->new(api => $self->rest_api);
+        my $id = eval { $sheet->create() };
+        if ($@) {
+            $self->_show_error("Failed to create spreadsheet:\n$@");
+        } else {
+            $sid_entry->set_text($id);
+        }
+        $create_btn->set_label('Create New…');
+        $create_btn->set_sensitive(TRUE);
+    });
+    $sid_box->pack_start($create_btn, FALSE, FALSE, 0);
+    $sheet_grid->attach($sid_box, 1, 0, 1, 1);
+
+    my $sheet_note = Gtk3::Label->new();
+    $sheet_note->set_markup(
+        '<span size="small" foreground="#555555">'
+        . 'Use File → Sync to Sheet / Sync from Sheet to transfer the library.</span>'
+    );
+    $sheet_note->set_xalign(0.0);
+    $sheet_note->set_line_wrap(TRUE);
+    $sheet_grid->attach($sheet_note, 1, 1, 1, 1);
+
     # ---- Config file path (informational) ----
     my $info_grid = Gtk3::Grid->new();
     $info_grid->set_row_spacing(4);
@@ -1172,10 +1228,78 @@ sub _settings_dialog {
             $auth->{$key} = $entries{$key}->get_text();
         }
         $self->config->_data->{acoustid_key} = $aid_entry->get_text();
+        $self->config->_data->{sheet_id}     = $sid_entry->get_text();
         $self->config->save();
         $self->_set_status('Settings saved. Restart to apply API credential changes.');
     }
     $dlg->destroy();
+}
+
+sub _auto_sync_to_sheet {
+    my ($self) = @_;
+    return unless $self->config->sheet_id();
+    $self->_set_status('Auto-syncing to Sheet…');
+    Gtk3::main_iteration_do(FALSE) while Gtk3::events_pending();
+    my $sheet  = $self->_sheet_db() or return;
+    my $counts = eval { $sheet->push_to_sheet($self->db) };
+    if ($@) {
+        $self->_set_status("Sheet sync failed: $@");
+    } else {
+        $self->_set_status(
+            "Sheet synced: $counts->{scan_folders} folders, $counts->{tracks} tracks."
+        );
+    }
+}
+
+sub _sheet_db {
+    my ($self) = @_;
+    my $sid = $self->config->sheet_id() or do {
+        $self->_show_error(
+            "No spreadsheet configured.\n\n" .
+            "Open File → Settings, enter or create a Spreadsheet ID."
+        );
+        return;
+    };
+    return unless $self->_init_api();
+    return DrivePlayer::SheetDB->new(
+        api            => $self->rest_api,
+        spreadsheet_id => $sid,
+    );
+}
+
+sub _sync_to_sheet {
+    my ($self) = @_;
+    my $sheet = $self->_sheet_db() or return;
+    $self->_set_status('Syncing to Sheet…');
+    Gtk3::main_iteration_do(FALSE) while Gtk3::events_pending();
+
+    my $counts = eval { $sheet->push_to_sheet($self->db) };
+    if ($@) {
+        $self->_show_error("Sync to Sheet failed:\n$@");
+        $self->_set_status('Sync failed.');
+    } else {
+        $self->_set_status(
+            "Synced to Sheet: $counts->{scan_folders} folders, $counts->{tracks} tracks."
+        );
+    }
+}
+
+sub _sync_from_sheet {
+    my ($self) = @_;
+    my $sheet = $self->_sheet_db() or return;
+    $self->_set_status('Syncing from Sheet…');
+    Gtk3::main_iteration_do(FALSE) while Gtk3::events_pending();
+
+    my $counts = eval { $sheet->pull_from_sheet($self->db) };
+    if ($@) {
+        $self->_show_error("Sync from Sheet failed:\n$@");
+        $self->_set_status('Sync failed.');
+    } else {
+        $self->_set_status(
+            "Synced from Sheet: $counts->{scan_folders} folders, $counts->{tracks} tracks updated."
+        );
+        $self->_load_library();
+    }
 }
 
 sub _tracklist_context_menu {
@@ -1358,6 +1482,7 @@ sub _fetch_all_metadata {
     $fetcher->_yield_sleep(1.5);
     $dlg->destroy();
     $self->_load_library();
+    $self->_auto_sync_to_sheet() if $updated > 0;
 }
 
 sub _edit_metadata_dialog {

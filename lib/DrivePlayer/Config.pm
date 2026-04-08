@@ -61,6 +61,7 @@ sub _defaults {
         log_level     => 'WARN',
         log_file      => $DEFAULT_LOG_FILE,
         acoustid_key  => '',
+        sheet_id      => '',
     };
 }
 
@@ -125,6 +126,7 @@ sub log_level    { $_[0]->_data->{log_level} // 'WARN' }
 sub log_file     { $_[0]->_data->{log_file} }
 sub token_file   { $_[0]->_data->{auth}{token_file} }
 sub acoustid_key { $_[0]->_data->{acoustid_key} // '' }
+sub sheet_id     { $_[0]->_data->{sheet_id}     // '' }
 
 1;
 

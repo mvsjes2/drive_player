@@ -129,12 +129,16 @@ sub _open {
     return $self->_sheets_api->open_spreadsheet(id => $self->{spreadsheet_id});
 }
 
+# range_all() is untested in this library version (returns bare sheet name,
+# which the API rejects).  Use an explicit large range instead.
+my $CLEAR_RANGE = 'A1:Z50000';
+
 # Write a header row then all data rows to a named worksheet (full replace).
 sub _write_worksheet {
     my ($self, $ss, $name, $cols, $rows) = @_;
     my $ws = $self->_ensure_worksheet($ss, $name);
 
-    $ws->range_all()->clear();
+    $ws->range($CLEAR_RANGE)->clear();
 
     my @data    = ([@$cols], @$rows);
     my $n_rows  = scalar @data;
@@ -148,7 +152,7 @@ sub _read_worksheet {
     my ($self, $ss, $name) = @_;
     my $ws = eval { $ss->open_worksheet(name => $name) } or return [];
 
-    my $all = eval { $ws->range_all()->values() } or return [];
+    my $all = eval { $ws->range($CLEAR_RANGE)->values() } or return [];
     return [] unless @$all;
 
     my @header = @{ shift @$all };

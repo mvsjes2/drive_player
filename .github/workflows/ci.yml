@@ -30,6 +30,7 @@ jobs:
             libgirepository1.0-dev \
             gir1.2-gtk-3.0 \
             mpv \
+            xauth \
             xvfb
 
       - run: perl -V

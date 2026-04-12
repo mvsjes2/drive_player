@@ -174,6 +174,13 @@ sub _ensure_mpv {
             '--really-quiet',
             "--input-ipc-server=$socket_path",
             '--gapless-audio=weak',
+            # Network buffering — reduces stuttering on slow/variable connections
+            '--cache=yes',
+            '--demuxer-max-bytes=32MiB',   # read-ahead buffer
+            '--demuxer-max-back-bytes=8MiB',
+            '--cache-pause=yes',           # pause & fill rather than stutter
+            '--cache-pause-wait=3',        # seconds of buffer before unpausing
+            '--network-timeout=30',
         ) or die "exec mpv failed: $!";
     }
 

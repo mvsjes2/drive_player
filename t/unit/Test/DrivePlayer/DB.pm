@@ -168,18 +168,27 @@ sub upsert_track_create : Tests(6) {
     is $t->{track_number}, 11,                'track_number correct';
 }
 
-sub upsert_track_update : Tests(3) {
+sub upsert_track_update : Tests(5) {
     my ($self) = @_;
 
     my $sf  = $self->db->upsert_scan_folder(FAKE_FOLDER_ID, FAKE_FOLDER_NAME);
     my $fld = $self->db->upsert_folder(sample_folder(scan_folder_id => $sf->{id}));
+
+    # First upsert sets metadata; second upsert (re-scan) should preserve it.
     $self->db->upsert_track(sample_track(folder_id => $fld->{id}, title => 'Old Title'));
     $self->db->upsert_track(sample_track(folder_id => $fld->{id}, title => 'New Title'));
 
-    is $self->db->track_count, 1, 'no duplicate on upsert';
+    is $self->db->track_count, 1,          'no duplicate on upsert';
     my $t = $self->db->get_track_by_drive_id(FAKE_TRACK_ID);
-    is $t->{title}, 'New Title', 'title updated on conflict';
-    is $t->{artist}, 'Queen',    'other fields preserved';
+    is $t->{title},  'Old Title', 'existing metadata preserved on re-scan';
+    is $t->{artist}, 'Queen',     'other fields preserved';
+
+    # A null/placeholder title should be filled in by the scan.
+    $self->db->upsert_track_from_metadata(drive_id => FAKE_TRACK_ID, title => undef);
+    $self->db->upsert_track(sample_track(folder_id => $fld->{id}, title => 'Filled Title'));
+    $t = $self->db->get_track_by_drive_id(FAKE_TRACK_ID);
+    is $t->{title},  'Filled Title', 'null title filled in by scan';
+    is $t->{artist}, 'Queen',        'artist preserved after null-fill';
 }
 
 sub get_track_by_id : Tests(2) {

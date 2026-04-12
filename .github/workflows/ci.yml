@@ -29,10 +29,11 @@ jobs:
             libglib2.0-dev \
             libgirepository1.0-dev \
             gir1.2-gtk-3.0 \
-            mpv
+            mpv \
+            xvfb
 
       - run: perl -V
       - run: cpanm --notest --installdeps --verbose .
       - run: perl Makefile.PL
       - run: make
-      - run: prove -wlvmb t
+      - run: xvfb-run prove -wlvmb t

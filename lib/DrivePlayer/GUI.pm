@@ -83,6 +83,7 @@ sub run {
     my $db_is_new = !-f $self->config->db_path();
     $self->_build_ui();
     $self->_auto_sync_from_sheet_on_new_db() if $db_is_new;
+    $self->_prune_removed_folders();
     $self->_load_library();
 
     Glib::Timeout->add($POLL_INTERVAL_MS, sub {
@@ -1291,6 +1292,19 @@ sub _auto_sync_to_sheet {
         $self->_set_status(
             "Sheet synced: $counts->{scan_folders} folders, $counts->{tracks} tracks."
         );
+    }
+}
+
+sub _prune_removed_folders {
+    my ($self) = @_;
+    my @config_ids = map { $_->{id} } @{ $self->config->music_folders() };
+    return unless @config_ids;   # no folders configured yet — nothing to prune
+
+    my %keep = map { $_ => 1 } @config_ids;
+    for my $sf ($self->db->all_scan_folders()) {
+        next if $keep{ $sf->{drive_id} };
+        $log->info("Pruning removed folder '$sf->{name}' from database") if $log;
+        $self->db->delete_scan_folder($sf->{drive_id});
     }
 }
 

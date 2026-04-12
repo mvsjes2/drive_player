@@ -205,10 +205,14 @@ sub _ensure_worksheet {
     $needed_rows = 1000 if !$needed_rows || $needed_rows < 1000;
 
     # Try to create; silently ignore the error if it already exists.
+    # If the API call fails (e.g. sheet already exists), the failed addSheet
+    # request is left in $ss's internal batch queue.  Clear it so that
+    # subsequent submit_requests() calls don't re-send the stale request.
     eval { $ss->add_worksheet(
         name            => $name,
         grid_properties => { rows => $needed_rows },
     )->submit_requests() };
+    delete $ss->{requests} if $@;
 
     my $ws = $ss->open_worksheet(name => $name);
 

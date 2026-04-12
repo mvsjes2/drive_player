@@ -1,7 +1,6 @@
 package DrivePlayer::MetadataFetcher;
 
-use strict;
-use warnings;
+use DrivePlayer::Setup;
 use File::Temp   qw( tempfile );
 use HTTP::Tiny;
 use JSON::PP     qw( decode_json );
@@ -10,28 +9,41 @@ use Time::HiRes  qw( sleep time usleep );
 
 my $log = do { eval { require Log::Log4perl; Log::Log4perl->get_logger(__PACKAGE__) } };
 
-my $USER_AGENT  = 'DrivePlayer/1.0 (https://github.com/mvsjes2/drive_player)';
-my $ITUNES_BASE = 'https://itunes.apple.com/search';
-my $MB_BASE     = 'https://musicbrainz.org/ws/2';
-my $AID_BASE    = 'https://api.acoustid.org/v2/lookup';
-my $DRIVE_URL   = 'https://www.googleapis.com/drive/v3/files/%s?alt=media';
-my $MB_MIN_GAP  = 1.1;
-my $DOWNLOAD_MB = 5;   # MB to download for fingerprinting
+Readonly my $USER_AGENT  => 'DrivePlayer/1.0 (https://github.com/mvsjes2/drive_player)';
+Readonly my $ITUNES_BASE => 'https://itunes.apple.com/search';
+Readonly my $MB_BASE     => 'https://musicbrainz.org/ws/2';
+Readonly my $AID_BASE    => 'https://api.acoustid.org/v2/lookup';
+Readonly my $DRIVE_URL   => 'https://www.googleapis.com/drive/v3/files/%s?alt=media';
+Readonly my $MB_MIN_GAP  => 1.1;
+Readonly my $DOWNLOAD_MB => 5;   # MB to download for fingerprinting
 
 my $last_mb_req = 0;
 
-sub new {
-    my ($class, %args) = @_;
-    return bless {
-        yield        => $args{yield},
-        acoustid_key => $args{acoustid_key} // '',
-        token_fn     => $args{token_fn},
-        _fp_stage    => undef,
-    }, $class;
-}
+has yield => (
+    is      => 'ro',
+    isa     => Maybe[CodeRef],
+    default => sub { undef },
+);
+
+has acoustid_key => (
+    is      => 'ro',
+    isa     => Str,
+    default => sub { '' },
+);
+
+has token_fn => (
+    is      => 'ro',
+    isa     => Maybe[CodeRef],
+    default => sub { undef },
+);
+
+has _fp_stage => (
+    is      => 'rw',
+    default => sub { undef },
+);
 
 # Returns a short description of where the last fingerprint lookup stopped.
-sub last_fp_stage { $_[0]->{_fp_stage} }
+sub last_fp_stage { $_[0]->_fp_stage }
 
 # ------------------------------------------------------------------
 # Public: text-based lookup (iTunes -> MusicBrainz, with title cleaning)
@@ -74,43 +86,43 @@ sub fetch {
 sub fetch_by_fingerprint {
     my ($self, %args) = @_;
     my $drive_id = $args{drive_id} or return;
-    $self->{_fp_stage} = undef;
+    $self->_fp_stage(undef);
 
-    return unless $self->{acoustid_key} && $self->{token_fn};
+    return unless $self->acoustid_key && $self->token_fn;
     return unless fpcalc_available();
 
-    $self->{_fp_stage} = 'downloading audio';
+    $self->_fp_stage('downloading audio');
     $log->info("Fingerprint: downloading audio for drive_id=$drive_id") if $log;
     my $tmpfile = $self->_download_partial($drive_id);
     unless ($tmpfile) {
-        $self->{_fp_stage} = 'download failed (token expired or Drive error)';
+        $self->_fp_stage('download failed (token expired or Drive error)');
         $log->warn("Fingerprint: download failed for drive_id=$drive_id") if $log;
         return;
     }
 
-    $self->{_fp_stage} = 'running fpcalc';
+    $self->_fp_stage('running fpcalc');
     $log->debug("Fingerprint: running fpcalc on $tmpfile") if $log;
     my $fp = _fingerprint($tmpfile);
     unlink $tmpfile;
     unless ($fp) {
-        $self->{_fp_stage} = 'fpcalc produced no fingerprint';
+        $self->_fp_stage('fpcalc produced no fingerprint');
         $log->warn("Fingerprint: fpcalc produced no output for drive_id=$drive_id") if $log;
         return;
     }
 
-    $self->{_fp_stage} = 'querying AcoustID';
+    $self->_fp_stage('querying AcoustID');
     $log->debug("Fingerprint: querying AcoustID (duration=$fp->{duration}s)") if $log;
     my $aid = $self->_query_acoustid($fp);
     unless ($aid) {
-        $self->{_fp_stage} = 'no AcoustID match (score too low or track unknown)';
+        $self->_fp_stage('no AcoustID match (score too low or track unknown)');
         $log->info("Fingerprint: no AcoustID match for drive_id=$drive_id") if $log;
         return;
     }
 
-    $self->{_fp_stage} = 'fetching MusicBrainz metadata';
+    $self->_fp_stage('fetching MusicBrainz metadata');
     $log->info("Fingerprint: AcoustID matched MusicBrainz recording $aid") if $log;
     my $meta = $self->_fetch_musicbrainz_by_id($aid);
-    $self->{_fp_stage} = $meta ? undef : 'MusicBrainz returned no data';
+    $self->_fp_stage($meta ? undef : 'MusicBrainz returned no data');
     $log->info($meta ? "Fingerprint: metadata found for drive_id=$drive_id" : "Fingerprint: MusicBrainz returned no data for $aid") if $log;
     return $meta;
 }
@@ -284,7 +296,7 @@ sub _fpcalc_available { fpcalc_available() }
 
 sub _download_partial {
     my ($self, $drive_id) = @_;
-    my $token = $self->{token_fn}->();
+    my $token = $self->token_fn->();
     unless ($token) {
         $log->warn("Fingerprint: no bearer token available") if $log;
         return;
@@ -328,7 +340,7 @@ sub _fingerprint {
 sub _query_acoustid {
     my ($self, $fp) = @_;
     my $url = $AID_BASE
-            . '?client='      . uri_escape_utf8($self->{acoustid_key})
+            . '?client='      . uri_escape_utf8($self->acoustid_key)
             . '&meta=recordings+compress'
             . '&duration='    . $fp->{duration}
             . '&fingerprint=' . uri_escape_utf8($fp->{fingerprint});
@@ -368,7 +380,7 @@ sub _get_mb {
 
 sub _yield_sleep {
     my ($self, $secs) = @_;
-    my $yield = $self->{yield};
+    my $yield = $self->yield;
     if ($yield) {
         my $end = time() + $secs;
         while (time() < $end) {

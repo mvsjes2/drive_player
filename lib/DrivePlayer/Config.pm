@@ -111,6 +111,7 @@ sub music_folders {
 
 sub add_music_folder {
     my ($self, $id, $name) = @_;
+    return if grep { $_->{id} eq $id } @{ $self->_data->{music_folders} };
     push @{ $self->_data->{music_folders} }, { id => $id, name => $name };
 }
 

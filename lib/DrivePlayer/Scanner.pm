@@ -5,6 +5,8 @@ use DrivePlayer::Setup;
 my $FOLDER_MIME  = 'application/vnd.google-apps.folder';
 my $DRIVE_FIELDS = 'files(id,name,mimeType,size,modifiedTime,parents,videoMediaMetadata)';
 
+Readonly my $LARGE_DELETION_THRESHOLD => 10;
+
 has drive => (
     is       => 'ro',
     isa      => HasMethods['list'],
@@ -29,11 +31,20 @@ has on_track_found => (
     predicate => 1,
 );
 
+has on_large_deletion => (
+    is        => 'ro',
+    isa       => Maybe[CodeRef],
+    default   => sub { undef },
+);
+
 has _stop => (
     is      => 'rw',
     isa     => Bool,
     default => 0,
 );
+
+has _seen_track_ids  => ( is => 'rw', isa => HashRef, default => sub { {} } );
+has _seen_folder_ids => ( is => 'rw', isa => HashRef, default => sub { {} } );
 
 sub stop { $_[0]->_stop(1) }
 
@@ -41,12 +52,10 @@ sub scan_folder {
     my ($self, $drive_id, $name) = @_;
 
     $self->_stop(0);
+    $self->_seen_track_ids({});
+    $self->_seen_folder_ids({});
 
-    # Upsert root scan_folder, clear stale data, then re-upsert
     my $scan_folder = $self->db->upsert_scan_folder($drive_id, $name);
-    $self->db->clear_scan_folder_tracks($scan_folder->{id});
-    $self->db->upsert_scan_folder($drive_id, $name);
-    $scan_folder = $self->db->get_scan_folder_by_drive_id($drive_id);
 
     $self->_scan_dir(
         folder_drive_id => $drive_id,
@@ -55,6 +64,20 @@ sub scan_folder {
         path            => $name,
         scan_folder_id  => $scan_folder->{id},
     );
+
+    my ($removed_tracks, $removed_folders) = (0, 0);
+    unless ($self->_stop) {
+        my $pending = $self->db->count_unseen_tracks($scan_folder->{id}, $self->_seen_track_ids);
+        my $confirmed = $pending <= $LARGE_DELETION_THRESHOLD
+                     || !$self->on_large_deletion
+                     || $self->on_large_deletion->($pending, $name);
+        if ($confirmed) {
+            $removed_tracks  = $self->db->remove_unseen_tracks($scan_folder->{id}, $self->_seen_track_ids);
+            $removed_folders = $self->db->remove_unseen_folders($scan_folder->{id}, $self->_seen_folder_ids);
+        }
+    }
+
+    return { removed_tracks => $removed_tracks, removed_folders => $removed_folders };
 }
 
 sub _progress {
@@ -73,6 +96,8 @@ sub _scan_dir {
 
     $self->_progress("Scanning: $path");
     return if $self->_stop;
+
+    $self->_seen_folder_ids->{$drive_id} = 1;
 
     my $folder = $self->db->upsert_folder(
         drive_id        => $drive_id,
@@ -121,6 +146,8 @@ sub _scan_dir {
 
 sub _store_track {
     my ($self, $file, $folder, $folder_path) = @_;
+
+    $self->_seen_track_ids->{$file->{id}} = 1;
 
     my ($title, $artist, $album, $track_num, $year) = _parse_filename($file->{name});
 

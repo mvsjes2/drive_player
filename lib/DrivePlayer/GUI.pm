@@ -18,6 +18,8 @@ use DrivePlayer::SheetDB;
 
 Readonly my $POLL_INTERVAL_MS => 500;
 
+my $log = do { eval { require Log::Log4perl; Log::Log4perl->get_logger(__PACKAGE__) } };
+
 has config => (
     is      => 'lazy',
     isa     => InstanceOf['DrivePlayer::Config'],
@@ -45,6 +47,7 @@ has sidebar_store      => ( is => 'rw' );
 has sidebar_view       => ( is => 'rw' );
 has track_store        => ( is => 'rw' );
 has track_view         => ( is => 'rw' );
+has track_count_label  => ( is => 'rw' );
 has now_playing_label  => ( is => 'rw' );
 has progress           => ( is => 'rw' );
 has time_label         => ( is => 'rw' );
@@ -77,7 +80,9 @@ sub BUILD {
 
 sub run {
     my ($self) = @_;
+    my $db_is_new = !-f $self->config->db_path();
     $self->_build_ui();
+    $self->_auto_sync_from_sheet_on_new_db() if $db_is_new;
     $self->_load_library();
 
     Glib::Timeout->add($POLL_INTERVAL_MS, sub {
@@ -199,9 +204,6 @@ sub _build_menubar {
     $self->_add_menu_item($file_menu, 'Add Music Folder…',  sub { $self->_add_folder_dialog() });
     $self->_add_menu_item($file_menu, 'Manage Folders…',    sub { $self->_manage_folders_dialog() });
     $file_menu->append(Gtk3::SeparatorMenuItem->new());
-    $self->_add_menu_item($file_menu, 'Sync to Sheet',      sub { $self->_sync_to_sheet() });
-    $self->_add_menu_item($file_menu, 'Sync from Sheet',    sub { $self->_sync_from_sheet() });
-    $file_menu->append(Gtk3::SeparatorMenuItem->new());
     $self->_add_menu_item($file_menu, 'Settings…',          sub { $self->_settings_dialog() });
     $file_menu->append(Gtk3::SeparatorMenuItem->new());
     $self->_add_menu_item($file_menu, 'Quit',               sub { $self->_quit() });
@@ -211,8 +213,7 @@ sub _build_menubar {
 
     # Library menu
     my $lib_menu = Gtk3::Menu->new();
-    $self->_add_menu_item($lib_menu, 'Scan All Folders',       sub { $self->_scan_all() });
-    $self->_add_menu_item($lib_menu, 'Scan New Folders',       sub { $self->_scan_new() });
+    $self->_add_menu_item($lib_menu, 'Sync',                   sub { $self->_sync_all() });
     $lib_menu->append(Gtk3::SeparatorMenuItem->new());
     $self->_add_menu_item($lib_menu, 'Fetch All Metadata',     sub { $self->_fetch_all_metadata() });
     $lib_menu->append(Gtk3::SeparatorMenuItem->new());
@@ -248,9 +249,9 @@ sub _build_toolbar {
 
     my $scan_btn = Gtk3::ToolButton->new(
         Gtk3::Image->new_from_icon_name('view-refresh', 'small-toolbar'),
-        'Scan'
+        'Sync'
     );
-    $scan_btn->signal_connect(clicked => sub { $self->_scan_all() });
+    $scan_btn->signal_connect(clicked => sub { $self->_sync_all() });
     $tb->insert($scan_btn, -1);
 
     my $add_btn = Gtk3::ToolButton->new(
@@ -286,7 +287,7 @@ sub _build_sidebar {
     my $view = Gtk3::TreeView->new($store);
     $view->set_headers_visible(FALSE);
     $view->get_selection()->set_mode('single');
-    $view->signal_connect('row-activated' => sub { $self->_sidebar_activated(@_) });
+    $view->signal_connect('cursor-changed' => sub { $self->_sidebar_activated($view) });
     $self->sidebar_view($view);
 
     $view->set_size_request(100, -1);
@@ -305,8 +306,19 @@ sub _build_sidebar {
 
 sub _build_tracklist {
     my ($self) = @_;
+    my $vbox = Gtk3::Box->new('vertical', 0);
+
     my $sw = Gtk3::ScrolledWindow->new();
     $sw->set_policy('automatic', 'automatic');
+    $vbox->pack_start($sw, TRUE, TRUE, 0);
+
+    my $count_lbl = Gtk3::Label->new('');
+    $count_lbl->set_xalign(1.0);
+    $count_lbl->set_margin_end(6);
+    $count_lbl->set_margin_top(2);
+    $count_lbl->set_margin_bottom(2);
+    $self->track_count_label($count_lbl);
+    $vbox->pack_start($count_lbl, FALSE, FALSE, 0);
 
     # ListStore columns: id, track#, title, artist, album, genre, duration_str, drive_id
     my $store = Gtk3::ListStore->new(
@@ -358,7 +370,7 @@ sub _build_tracklist {
     });
 
     $sw->add($view);
-    return $sw;
+    return $vbox;
 }
 
 sub _build_searchbar {
@@ -531,6 +543,9 @@ sub _populate_tracklist {
             7, $t->{drive_id}     // '',
         );
     }
+
+    my $n = scalar @tracks;
+    $self->track_count_label->set_text($n == 1 ? '1 track' : "$n tracks");
 }
 
 # ---- Playback ----
@@ -622,13 +637,18 @@ sub _on_state_change {
 
 sub _player_poll {
     my ($self) = @_;
-    eval { $self->player->poll() } if $self->player;
+    if ($self->player) {
+        eval { $self->player->poll() };
+        $log->warn("Player poll error: $@") if $@ && $log;
+    }
 }
 
 # ---- Sidebar activation ----
 
 sub _sidebar_activated {
-    my ($self, $view, $path, $col) = @_;
+    my ($self, $view) = @_;
+    my ($path) = $view->get_cursor();
+    return unless $path;
     my $store = $self->sidebar_store;
     my $iter  = $store->get_iter($path);
     my $type  = $store->get($iter, 1);
@@ -663,31 +683,7 @@ sub _on_search {
 
 # ---- Scanning ----
 
-sub _scan_new {
-    my ($self) = @_;
-    return unless $self->_init_api();
-
-    my @all = @{ $self->config->music_folders() };
-    unless (@all) {
-        $self->_show_error("No music folders configured.\nUse File → Add Music Folder.");
-        return;
-    }
-
-    my %scanned = map { $_->{drive_id} => 1 } $self->db->all_scan_folders();
-    my @new     = grep { !$scanned{ $_->{id} } } @all;
-
-    unless (@new) {
-        $self->_show_error(
-            "All configured folders have already been scanned.\n"
-          . "Use Library \x{2192} Scan All Folders to rescan."
-        );
-        return;
-    }
-
-    $self->_show_scan_dialog(\@new);
-}
-
-sub _scan_all {
+sub _sync_all {
     my ($self) = @_;
     return unless $self->_init_api();
 
@@ -697,14 +693,14 @@ sub _scan_all {
         return;
     }
 
-    $self->_show_scan_dialog(\@folders);
+    $self->_show_sync_dialog(\@folders);
 }
 
-sub _show_scan_dialog {
+sub _show_sync_dialog {
     my ($self, $folders) = @_;
 
     my $dlg = Gtk3::Dialog->new_with_buttons(
-        'Scanning Library', $self->win,
+        'Syncing Library', $self->win,
         [qw/ modal destroy-with-parent /],
         'Stop', 'cancel',
     );
@@ -730,10 +726,11 @@ sub _show_scan_dialog {
 
     $dlg->show_all();
 
-    my $track_count = 0;
-    my $total       = scalar @$folders;
-    my $current     = 0;
-    my $stopped     = FALSE;
+    my $track_count    = 0;
+    my $total_removed  = 0;
+    my $total          = scalar @$folders;
+    my $current        = 0;
+    my $stopped        = FALSE;
 
     my $scanner = DrivePlayer::Scanner->new(
         drive    => $self->drive,
@@ -749,6 +746,16 @@ sub _show_scan_dialog {
             $count_lbl->set_text("$track_count tracks found");
             Gtk3::main_iteration_do(FALSE) while Gtk3::events_pending();
         },
+        on_large_deletion => sub {
+            my ($count, $folder_name) = @_;
+            my $confirm = Gtk3::MessageDialog->new(
+                $self->win, 'destroy-with-parent', 'warning', 'yes-no',
+                "$count tracks would be removed from \"$folder_name\".\n\nProceed with deletion?",
+            );
+            my $response = $confirm->run();
+            $confirm->destroy();
+            return $response eq 'yes';
+        },
     );
     $self->scanner($scanner);
 
@@ -757,28 +764,32 @@ sub _show_scan_dialog {
         $scanner->stop();
     });
 
-    # Scan each folder in sequence, processing GTK events between each
     for my $folder (@$folders) {
         last if $stopped;
         $current++;
-        $status_lbl->set_text("Scanning folder $current/$total: $folder->{name}");
+        $status_lbl->set_text("Syncing folder $current/$total: $folder->{name}");
         $progress->set_fraction($current / ($total + 1));
         Gtk3::main_iteration_do(FALSE) while Gtk3::events_pending();
 
-        eval {
-            $scanner->scan_folder($folder->{id}, $folder->{name});
-        };
-        $self->_set_status("Error scanning $folder->{name}: $@") if $@;
+        my $result = eval { $scanner->scan_folder($folder->{id}, $folder->{name}) };
+        if ($@) {
+            $self->_set_status("Error syncing $folder->{name}: $@");
+        } else {
+            $total_removed += $result->{removed_tracks};
+        }
     }
 
+    my $done_msg = "Done. $track_count tracks";
+    $done_msg   .= ", $total_removed removed" if $total_removed > 0;
+    $done_msg   .= '.';
     $progress->set_fraction(1.0);
-    $status_lbl->set_text("Done. $track_count tracks found.");
+    $status_lbl->set_text($done_msg);
     Gtk3::main_iteration_do(FALSE) while Gtk3::events_pending();
     sleep 1;
 
     $dlg->destroy();
     $self->_load_library();
-    $self->_auto_sync_to_sheet() if $track_count > 0;
+    $self->_auto_sync_to_sheet() unless $stopped;
 }
 
 # ---- Dialogs ----
@@ -845,7 +856,7 @@ sub _add_folder_dialog {
         if ($id) {
             $self->config->add_music_folder($id, $name);
             $self->config->save();
-            $self->_set_status("Added folder: $name. Use Library \x{2192} Scan All to index it.");
+            $self->_set_status("Added folder: $name. Use Library \x{2192} Sync to index it.");
         }
     }
     $dlg->destroy();
@@ -854,6 +865,7 @@ sub _add_folder_dialog {
 sub _fetch_drive_name {
     my ($self, $folder_id) = @_;
     my $meta = eval { $self->drive->file(id => $folder_id)->get(fields => 'id,name') };
+    $log->warn("Failed to fetch Drive name for $folder_id: $@") if $@ && $log;
     return $meta ? $meta->{name} : undef;
 }
 
@@ -993,6 +1005,16 @@ sub _manage_folders_dialog {
     my $sw = Gtk3::ScrolledWindow->new();
     $sw->add($view);
 
+    my $sync_btn = Gtk3::Button->new_with_label('Sync Selected');
+    $sync_btn->signal_connect(clicked => sub {
+        my $sel  = $view->get_selection();
+        my ($model, $iter) = $sel->get_selected();
+        return unless $iter;
+        my ($name, $id) = ($model->get($iter, 0), $model->get($iter, 1));
+        return unless $self->_init_api();
+        $self->_show_sync_dialog([{ id => $id, name => $name }]);
+    });
+
     my $remove_btn = Gtk3::Button->new_with_label('Remove Selected');
     $remove_btn->signal_connect(clicked => sub {
         my $sel  = $view->get_selection();
@@ -1006,9 +1028,13 @@ sub _manage_folders_dialog {
         $self->_load_library();
     });
 
+    my $btn_box = Gtk3::Box->new('horizontal', 4);
+    $btn_box->pack_start($sync_btn,   FALSE, FALSE, 0);
+    $btn_box->pack_end  ($remove_btn, FALSE, FALSE, 0);
+
     my $vbox = $dlg->get_content_area();
-    $vbox->pack_start($sw,         TRUE,  TRUE,  0);
-    $vbox->pack_start($remove_btn, FALSE, FALSE, 4);
+    $vbox->pack_start($sw,      TRUE,  TRUE,  0);
+    $vbox->pack_start($btn_box, FALSE, FALSE, 4);
     $dlg->show_all();
     $dlg->run();
     $dlg->destroy();
@@ -1168,25 +1194,37 @@ sub _settings_dialog {
     my $sid_entry = Gtk3::Entry->new();
     $sid_entry->set_hexpand(TRUE);
     $sid_entry->set_text($self->config->sheet_id());
-    $sid_entry->set_placeholder_text('Paste spreadsheet ID, or click Create');
+    $sid_entry->set_placeholder_text('Paste spreadsheet ID, or click Find or Create');
     $sid_box->pack_start($sid_entry, TRUE, TRUE, 0);
 
-    my $create_btn = Gtk3::Button->new_with_label('Create New…');
-    $create_btn->set_tooltip_text('Create a new Google Sheet in your Drive');
+    my $create_btn = Gtk3::Button->new_with_label('Find or Create…');
+    $create_btn->set_tooltip_text('Use existing DrivePlayer Library spreadsheet, or create one');
     $create_btn->signal_connect(clicked => sub {
         return unless $self->_init_api();
         $create_btn->set_sensitive(FALSE);
-        $create_btn->set_label('Creating…');
+        $create_btn->set_label('Searching…');
         Gtk3::main_iteration_do(FALSE) while Gtk3::events_pending();
 
-        my $sheet = DrivePlayer::SheetDB->new(api => $self->rest_api);
-        my $id = eval { $sheet->create() };
+        my $id;
+        my @found = eval {
+            $self->drive->list(
+                filter => "name='DrivePlayer Library' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false",
+                params => { fields => 'files(id,name)', pageSize => 1 },
+            );
+        };
         if ($@) {
-            $self->_show_error("Failed to create spreadsheet:\n$@");
+            $self->_show_error("Drive search failed:\n$@");
+        } elsif (@found) {
+            $id = $found[0]{id};
         } else {
-            $sid_entry->set_text($id);
+            $create_btn->set_label('Creating…');
+            Gtk3::main_iteration_do(FALSE) while Gtk3::events_pending();
+            my $sheet = DrivePlayer::SheetDB->new(api => $self->rest_api);
+            $id = eval { $sheet->create() };
+            $self->_show_error("Failed to create spreadsheet:\n$@") if $@;
         }
-        $create_btn->set_label('Create New…');
+        $sid_entry->set_text($id) if $id;
+        $create_btn->set_label('Find or Create…');
         $create_btn->set_sensitive(TRUE);
     });
     $sid_box->pack_start($create_btn, FALSE, FALSE, 0);
@@ -1195,7 +1233,7 @@ sub _settings_dialog {
     my $sheet_note = Gtk3::Label->new();
     $sheet_note->set_markup(
         '<span size="small" foreground="#555555">'
-        . 'Use File → Sync to Sheet / Sync from Sheet to transfer the library.</span>'
+        . 'The library syncs to this sheet automatically after each Library → Sync.</span>'
     );
     $sheet_note->set_xalign(0.0);
     $sheet_note->set_line_wrap(TRUE);
@@ -1243,12 +1281,75 @@ sub _auto_sync_to_sheet {
     my $sheet  = $self->_sheet_db() or return;
     my $counts = eval { $sheet->push_to_sheet($self->db) };
     if ($@) {
-        $self->_set_status("Sheet sync failed: $@");
+        if ($@ =~ /^SHEET_NOT_FOUND:/) {
+            $self->_clear_sheet_id();
+            $self->_set_status('Spreadsheet not found (deleted?); sheet ID cleared.');
+        } else {
+            $self->_set_status("Sheet sync failed: $@");
+        }
     } else {
         $self->_set_status(
             "Sheet synced: $counts->{scan_folders} folders, $counts->{tracks} tracks."
         );
     }
+}
+
+sub _auto_sync_from_sheet_on_new_db {
+    my ($self) = @_;
+
+    # Skip silently if OAuth credentials aren't configured on this device yet
+    my $auth = $self->config->auth_config();
+    return unless $auth->{client_id} && $auth->{client_secret};
+    return unless -f ($auth->{token_file} // '');
+
+    my $api = $self->_init_api() or return;
+
+    my $sheet_id = $self->config->sheet_id();
+
+    unless ($sheet_id) {
+        # Search Drive for the spreadsheet by name
+        my @found = eval {
+            $self->drive->list(
+                filter => "name='DrivePlayer Library' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false",
+                params => { fields => 'files(id,name)', pageSize => 1 },
+            );
+        };
+        if ($@) {
+            $log->warn("New-device sheet restore: Drive search failed: $@") if $log;
+            return;
+        }
+        unless (@found) {
+            $log->info('New-device sheet restore: no DrivePlayer Library spreadsheet found') if $log;
+            return;
+        }
+
+        $sheet_id = $found[0]{id};
+        $self->config->_data->{sheet_id} = $sheet_id;
+        $self->config->save();
+        $log->info("New-device sheet restore: found spreadsheet $sheet_id") if $log;
+    }
+
+    my $sheet = DrivePlayer::SheetDB->new(
+        api            => $api,
+        spreadsheet_id => $sheet_id,
+    );
+    my $counts = eval { $sheet->pull_from_sheet($self->db) };
+    if ($@) {
+        if ($@ =~ /^SHEET_NOT_FOUND:/) {
+            $self->_clear_sheet_id();
+        } else {
+            $log->warn("New-device sheet restore: pull_from_sheet failed: $@") if $log;
+        }
+    } else {
+        $log->info("New-device sheet restore: pulled $counts->{scan_folders} folders, $counts->{tracks} tracks") if $log;
+    }
+}
+
+sub _clear_sheet_id {
+    my ($self) = @_;
+    $self->config->_data->{sheet_id} = '';
+    $self->config->save();
+    $log->warn('Spreadsheet not found (deleted?); sheet ID cleared from config') if $log;
 }
 
 sub _sheet_db {
@@ -1275,7 +1376,12 @@ sub _sync_to_sheet {
 
     my $counts = eval { $sheet->push_to_sheet($self->db) };
     if ($@) {
-        $self->_show_error("Sync to Sheet failed:\n$@");
+        if ($@ =~ /^SHEET_NOT_FOUND:/) {
+            $self->_clear_sheet_id();
+            $self->_show_error("Spreadsheet not found (deleted?).\n\nThe sheet ID has been cleared. Use File → Settings to create or enter a new one.");
+        } else {
+            $self->_show_error("Sync to Sheet failed:\n$@");
+        }
         $self->_set_status('Sync failed.');
     } else {
         $self->_set_status(
@@ -1292,7 +1398,12 @@ sub _sync_from_sheet {
 
     my $counts = eval { $sheet->pull_from_sheet($self->db) };
     if ($@) {
-        $self->_show_error("Sync from Sheet failed:\n$@");
+        if ($@ =~ /^SHEET_NOT_FOUND:/) {
+            $self->_clear_sheet_id();
+            $self->_show_error("Spreadsheet not found (deleted?).\n\nThe sheet ID has been cleared. Use File → Settings to create or enter a new one.");
+        } else {
+            $self->_show_error("Sync from Sheet failed:\n$@");
+        }
         $self->_set_status('Sync failed.');
     } else {
         $self->_set_status(
@@ -1451,12 +1562,14 @@ sub _fetch_all_metadata {
             artist => $track->{artist},
             album  => $track->{album},
         ) };
+        $log->warn("Metadata fetch failed for '$track->{title}': $@") if $@ && $log;
 
         unless ($meta) {
             next unless $use_fingerprint;
             $status_lbl->set_text("$i/$total [downloading]: $track->{title}");
             $yield->();
             $meta = eval { $fetcher->fetch_by_fingerprint(drive_id => $track->{drive_id}) };
+            $log->warn("Fingerprint fetch failed for '$track->{title}': $@") if $@ && $log;
             next unless $meta;
         }
 

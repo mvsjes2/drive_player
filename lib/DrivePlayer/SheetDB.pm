@@ -1,46 +1,50 @@
 package DrivePlayer::SheetDB;
 
-use strict;
-use warnings;
+use DrivePlayer::Setup;
+use Google::RestApi::DriveApi3;
 use Google::RestApi::SheetsApi4;
 
-# Columns for the scan_folders index worksheet.
-my @SF_COLS = qw( drive_id name );
+my $log = do { eval { require Log::Log4perl; Log::Log4perl->get_logger(__PACKAGE__) } };
 
-# Metadata columns written to each per-folder worksheet.
-my @TRACK_COLS = qw( drive_id title artist album track_number year genre composer comment );
+my %SHEET_PROPERTIES = (
+    folders => {
+        cols => [ qw( drive_id name ) ],
+    },
+    tracks => {
+        cols => [ qw( drive_id title artist album track_number year genre composer comment ) ],
+    },
+);
 
 # ------------------------------------------------------------------
-# Constructor
+# Attributes
 # ------------------------------------------------------------------
 
-sub new {
-    my ($class, %args) = @_;
-    return bless {
-        api            => $args{api},              # Google::RestApi instance
-        spreadsheet_id => $args{spreadsheet_id},   # undef before create()
-    }, $class;
-}
+has api => (
+    is       => 'ro',
+    required => 1,
+);
 
-sub spreadsheet_id { $_[0]->{spreadsheet_id} }
+has spreadsheet_id => (
+    is      => 'rw',
+    default => sub { undef },
+);
 
 # ------------------------------------------------------------------
 # Create
 # ------------------------------------------------------------------
 
 # Create a new spreadsheet and return its ID (also stored in $self).
-# The default "Sheet1" is renamed to "scan_folders"; folder worksheets
+# The default "Sheet1" is renamed to "folders"; folder worksheets
 # are created on first push.
 sub create {
     my ($self) = @_;
     my $ss = $self->_sheets_api->create_spreadsheet(title => 'DrivePlayer Library');
-    $self->{spreadsheet_id} = $ss->spreadsheet_id();
+    $self->spreadsheet_id($ss->spreadsheet_id());
 
     my $ws0 = $ss->open_worksheet(id => 0);
-    $ws0->ws_rename('scan_folders');
-    $ss->submit_requests();
+    $ws0->ws_rename('folders')->submit_requests();
 
-    return $self->{spreadsheet_id};
+    return $self->spreadsheet_id;
 }
 
 # ------------------------------------------------------------------
@@ -54,19 +58,20 @@ sub push_to_sheet {
     my ($self, $db) = @_;
     my $ss = $self->_open();
 
+    # Write the folders index tab
     my @scan_folders = $db->all_scan_folders();
-
-    # Write the scan_folders index tab
-    my @sf_rows = map { [$_->{drive_id}, $_->{name}] } @scan_folders;
-    $self->_write_worksheet($ss, 'scan_folders', \@SF_COLS, \@sf_rows);
+    my @folder_rows = map { [$_->{drive_id}, $_->{name}] } @scan_folders;
+    $self->_write_worksheet($ss, 'folders', 'folders', \@folder_rows);
 
     # Write one worksheet per scan folder
     my $total_tracks = 0;
     for my $sf (@scan_folders) {
         my @tracks     = $db->tracks_by_scan_folder($sf->{id});
-        my @track_rows = map { my $t = $_;
-                               [map { $t->{$_} // '' } @TRACK_COLS] } @tracks;
-        $self->_write_worksheet($ss, _ws_name($sf->{name}), \@TRACK_COLS, \@track_rows);
+        my @track_rows = map {
+            my $t = $_;
+            [map { $t->{$_} // '' } $SHEET_PROPERTIES{tracks}->{cols}->@*]
+        } @tracks;
+        $self->_write_worksheet($ss, _ws_name($sf->{name}), 'tracks', \@track_rows);
         $total_tracks += scalar @tracks;
     }
 
@@ -85,33 +90,50 @@ sub pull_from_sheet {
     my ($self, $db) = @_;
     my $ss = $self->_open();
 
-    # Pull scan_folders index
-    my $sf_rows  = $self->_read_worksheet($ss, 'scan_folders');
-    my $sf_count = 0;
-    for my $row (@$sf_rows) {
+    # Pull folders index
+    my $folder_rows  = $self->_read_worksheet($ss, 'folders');
+    my $folder_count = 0;
+    for my $row (@$folder_rows) {
         next unless $row->{drive_id} && $row->{name};
         $db->upsert_scan_folder($row->{drive_id}, $row->{name});
-        $sf_count++;
+        $folder_count++;
     }
 
     # Pull tracks from each folder worksheet
     my $track_count = 0;
-    for my $sf_row (@$sf_rows) {
-        next unless $sf_row->{name};
-        my $rows = $self->_read_worksheet($ss, _ws_name($sf_row->{name}));
+    for my $folder_row (@$folder_rows) {
+        next unless $folder_row->{drive_id} && $folder_row->{name};
+
+        # Ensure a root folder record exists for this scan folder so that
+        # skeleton tracks have a valid folder_id and tracks_by_scan_folder
+        # can find them before a Drive scan has been run.
+        my $sf = $db->get_scan_folder_by_drive_id($folder_row->{drive_id});
+        next unless $sf;
+        my $folder = $db->upsert_folder(
+            drive_id        => $folder_row->{drive_id},
+            name            => $folder_row->{name},
+            parent_drive_id => undef,
+            path            => $folder_row->{name},
+            scan_folder_id  => $sf->{id},
+        );
+
+        my $rows = $self->_read_worksheet($ss, _ws_name($folder_row->{name}));
         for my $row (@$rows) {
             next unless $row->{drive_id};
-            my $track = $db->get_track_by_drive_id($row->{drive_id}) or next;
-            $db->update_track_metadata($track->{id},
-                map  { $_ => $row->{$_} }
-                grep { defined $row->{$_} && $row->{$_} ne '' }
-                @TRACK_COLS
-            );
+            my %meta = map  { $_ => $row->{$_} }
+                       grep { defined $row->{$_} && $row->{$_} ne '' }
+                       $SHEET_PROPERTIES{tracks}->{cols}->@*;
+            my $track = $db->get_track_by_drive_id($row->{drive_id});
+            if ($track) {
+                $db->update_track_metadata($track->{id}, %meta);
+            } else {
+                $db->upsert_track_from_metadata(%meta, folder_id => $folder->{id});
+            }
             $track_count++;
         }
     }
 
-    return { scan_folders => $sf_count, tracks => $track_count };
+    return { scan_folders => $folder_count, tracks => $track_count };
 }
 
 # ------------------------------------------------------------------
@@ -120,47 +142,54 @@ sub pull_from_sheet {
 
 sub _sheets_api {
     my ($self) = @_;
-    return Google::RestApi::SheetsApi4->new(api => $self->{api});
+    return Google::RestApi::SheetsApi4->new(api => $self->api);
 }
 
 sub _open {
     my ($self) = @_;
-    die "No spreadsheet_id configured\n" unless $self->{spreadsheet_id};
-    return $self->_sheets_api->open_spreadsheet(id => $self->{spreadsheet_id});
-}
+    die "No spreadsheet_id configured\n" unless $self->spreadsheet_id;
 
-# range_all() is untested in this library version (returns bare sheet name,
-# which the API rejects).  Use an explicit large range instead.
-my $CLEAR_RANGE = 'A1:Z50000';
+    # Use Drive API to verify the file exists and is not trashed before
+    # opening via Sheets API (which happily operates on trashed files).
+    my $drive = Google::RestApi::DriveApi3->new(api => $self->api);
+    my $meta  = eval { $drive->file(id => $self->spreadsheet_id)->get(fields => 'id,trashed') };
+    if ($@) {
+        die "SHEET_NOT_FOUND: $@" if $@ =~ /404|not.?found/i;
+        die $@;
+    }
+    die "SHEET_NOT_FOUND: spreadsheet has been trashed\n" if $meta->{trashed};
+
+    return $self->_sheets_api->open_spreadsheet(id => $self->spreadsheet_id);
+}
 
 # Write a header row then all data rows to a named worksheet (full replace).
 sub _write_worksheet {
-    my ($self, $ss, $name, $cols, $rows) = @_;
+    my ($self, $ss, $name, $properties, $rows) = @_;
     my $ws = $self->_ensure_worksheet($ss, $name);
-
-    $ws->range($CLEAR_RANGE)->clear();
-
-    my @data    = ([@$cols], @$rows);
-    my $n_rows  = scalar @data;
-    my $end_col = _col_letter(scalar @$cols);
-    $ws->range("A1:${end_col}${n_rows}")->values(values => \@data);
+    $ws->range("A1:Z500")->clear();
+    $ws->row(1, $SHEET_PROPERTIES{$properties}->{cols});
+    $ws->rows([2 .. scalar @$rows + 1], $rows) if @$rows;
 }
 
 # Read a worksheet and return arrayref of hashrefs keyed by header row.
 # Returns [] if the worksheet doesn't exist or is empty.
 sub _read_worksheet {
     my ($self, $ss, $name) = @_;
-    my $ws = eval { $ss->open_worksheet(name => $name) } or return [];
+    my $ws = eval { $ss->open_worksheet(name => $name) };
+    if ($@) { $log->warn("Could not open worksheet '$name': $@") if $log; return [] }
+    return [] unless $ws;
 
-    my $all = eval { $ws->range($CLEAR_RANGE)->values() } or return [];
-    return [] unless @$all;
+    $ws->enable_header_row();
+    my $col = 1;
+    my $cols = $ws->tie_cols(map { $_ => { col => $col++ }; } $ws->header_row->@*);
+    tied(%$cols)->values();      # prefetch the columns.
 
-    my @header = @{ shift @$all };
     my @result;
-    for my $row (@$all) {
-        my %rec;
-        $rec{ $header[$_] } = $row->[$_] // '' for 0 .. $#header;
-        push @result, \%rec;
+    my $i = tied(%$cols)->iterator(from => 0);
+    while (my $row = $i->iterate()) {
+        tied(%$row)->values();
+        last unless $row->{drive_id};
+        push(@result, $row);
     }
     return \@result;
 }
@@ -168,10 +197,8 @@ sub _read_worksheet {
 # Open a worksheet by name, creating it if absent.
 sub _ensure_worksheet {
     my ($self, $ss, $name) = @_;
-    my $ws = eval { $ss->open_worksheet(name => $name) };
-    return $ws if $ws;
-    $ss->add_worksheet(name => $name);
-    $ss->submit_requests();
+    # add_worksheet fails if the sheet already exists — that's fine, ignore it.
+    eval { $ss->add_worksheet(name => $name)->submit_requests() };
     return $ss->open_worksheet(name => $name);
 }
 
@@ -183,12 +210,6 @@ sub _ws_name {
     $name =~ s/^\s+|\s+$//g;
     $name = 'Folder' unless length $name;
     return substr($name, 0, 100);
-}
-
-# Convert a 1-based column number to a letter (1→A … 26→Z).
-sub _col_letter {
-    my ($n) = @_;
-    return chr(64 + $n);
 }
 
 1;
@@ -215,11 +236,11 @@ DrivePlayer::SheetDB - Sync the DrivePlayer library to/from a Google Sheet
 =head1 DESCRIPTION
 
 Maintains a Google Spreadsheet with one worksheet per scan folder, plus a
-C<scan_folders> index tab:
+C<folders> index tab:
 
 =over 4
 
-=item scan_folders
+=item folders
 
 C<drive_id> and C<name> for every top-level folder in the library.
 
@@ -237,7 +258,7 @@ The Sheet is a portable sync target accessible from any device with Drive access
 =head1 NEW DEVICE WORKFLOW
 
   1. File -> Sync from Sheet   # pulls scan_folders into SQLite
-  2. Library -> Scan           # discovers audio files on Drive
+  2. Library -> Sync           # discovers audio files on Drive
   3. File -> Sync from Sheet   # applies saved metadata to the scanned tracks
 
 =head1 METHODS
@@ -249,12 +270,12 @@ C<spreadsheet_id> is optional (omit before calling C<create()>).
 
 =head2 create()
 
-Creates a new "DrivePlayer Library" spreadsheet with a C<scan_folders> tab.
+Creates a new "DrivePlayer Library" spreadsheet with a C<folders> tab.
 Returns and stores the new spreadsheet ID.
 
 =head2 push_to_sheet($db)
 
-Writes the C<scan_folders> index and one worksheet of track metadata per
+Writes the C<folders> index and one worksheet of track metadata per
 folder, replacing whatever was there before.
 
 =head2 pull_from_sheet($db)

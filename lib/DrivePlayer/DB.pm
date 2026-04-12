@@ -100,10 +100,30 @@ sub folders_for_scan_folder {
 
 # ---------- tracks ----------
 
+my @STRUCTURAL_FIELDS = qw( folder_id folder_path mime_type size modified_time duration_ms );
+my @METADATA_FIELDS   = qw( title artist album track_number year genre composer comment );
+
 sub upsert_track {
     my ($self, %t) = @_;
-    $self->_rs('Track')->update_or_create(
-        {
+    my $existing = $self->_rs('Track')->find({ drive_id => $t{drive_id} });
+
+    if ($existing) {
+        # Always refresh structural fields from the Drive scan.
+        # Preserve metadata fields that are already populated; only fill in
+        # nulls from the scan's filename-derived values.  This ensures that
+        # metadata loaded from the sheet (or set via AcoustID) is never
+        # silently overwritten by a re-scan.
+        my %update = map { $_ => $t{$_} } @STRUCTURAL_FIELDS;
+        for my $f (@METADATA_FIELDS) {
+            my $cur = $existing->get_column($f);
+            # Treat the drive_id placeholder as absent for the title field.
+            my $absent = !defined $cur || $cur eq ''
+                      || ($f eq 'title' && $cur eq $existing->drive_id);
+            $update{$f} = $t{$f} if $absent;
+        }
+        $existing->update(\%update);
+    } else {
+        $self->_rs('Track')->create({
             drive_id      => $t{drive_id},
             title         => $t{title},
             artist        => $t{artist},
@@ -119,9 +139,8 @@ sub upsert_track {
             genre         => $t{genre},
             composer      => $t{composer},
             comment       => $t{comment},
-        },
-        { key => 'unique_drive_id' },
-    );
+        });
+    }
 }
 
 sub update_track_metadata {
@@ -132,6 +151,30 @@ sub update_track_metadata {
     my %update = map { $_ => $fields{$_} }
         grep { $allowed{$_} } keys %fields;
     $row->update(\%update) if %update;
+}
+
+# Insert or update a track using only the metadata fields available from the
+# sheet (drive_id + title/artist/album etc.).  Structural fields (folder_id,
+# mime_type, size, …) are left null or at their placeholder values so that a
+# subsequent Drive scan can fill them in via upsert_track.
+sub upsert_track_from_metadata {
+    my ($self, %fields) = @_;
+    $self->_rs('Track')->update_or_create(
+        {
+            drive_id     => $fields{drive_id},
+            title        => $fields{title} || $fields{drive_id},
+            mime_type    => $fields{mime_type} || 'audio/',
+            folder_id    => $fields{folder_id}    // undef,
+            artist       => $fields{artist}       // undef,
+            album        => $fields{album}        // undef,
+            track_number => $fields{track_number} // undef,
+            year         => $fields{year}         // undef,
+            genre        => $fields{genre}        // undef,
+            composer     => $fields{composer}     // undef,
+            comment      => $fields{comment}      // undef,
+        },
+        { key => 'unique_drive_id' },
+    );
 }
 
 sub get_track {
@@ -285,6 +328,41 @@ sub clear_scan_folder_tracks {
         $self->_rs('Track')->search({ folder_id => \@folder_ids })->delete;
     }
     $self->_rs('Folder')->search({ scan_folder_id => $scan_folder_id })->delete;
+}
+
+sub count_unseen_tracks {
+    my ($self, $scan_folder_id, $seen) = @_;
+    my @keep = keys %$seen;
+    my @folder_ids = $self->_rs('Folder')
+        ->search({ scan_folder_id => $scan_folder_id })
+        ->get_column('id')->all;
+    return 0 unless @folder_ids;
+    return $self->_rs('Track')->search({
+        folder_id => { -in  => \@folder_ids },
+        (@keep ? (drive_id => { -not_in => \@keep }) : ()),
+    })->count;
+}
+
+sub remove_unseen_tracks {
+    my ($self, $scan_folder_id, $seen) = @_;
+    my @keep = keys %$seen;
+    my @folder_ids = $self->_rs('Folder')
+        ->search({ scan_folder_id => $scan_folder_id })
+        ->get_column('id')->all;
+    return 0 unless @folder_ids;
+    return $self->_rs('Track')->search({
+        folder_id => { -in  => \@folder_ids },
+        (@keep ? (drive_id => { -not_in => \@keep }) : ()),
+    })->delete;
+}
+
+sub remove_unseen_folders {
+    my ($self, $scan_folder_id, $seen) = @_;
+    my @keep = keys %$seen;
+    return $self->_rs('Folder')->search({
+        scan_folder_id => $scan_folder_id,
+        (@keep ? (drive_id => { -not_in => \@keep }) : ()),
+    })->delete;
 }
 
 1;

@@ -11,6 +11,8 @@ use POSIX           qw( :sys_wait_h );
 use Time::HiRes     qw( time sleep );
 
 Readonly my $DRIVE_FILE_URL => 'https://www.googleapis.com/drive/v3/files/%s?alt=media';
+
+my $log = do { eval { require Log::Log4perl; Log::Log4perl->get_logger(__PACKAGE__) } };
 Readonly my $IPC_TIMEOUT    => 0.5;   # seconds to wait for mpv response
 Readonly my $TOKEN_MAX_AGE  => 3300;  # refresh bearer token after 55 minutes
 
@@ -203,6 +205,7 @@ sub _send_command {
     my ($self, $cmd) = @_;
     return unless $self->_socket;
     eval { $self->_socket->print(encode_json({ command => $cmd }) . "\n") };
+    $log->warn("IPC send failed: $@") if $@ && $log;
 }
 
 sub _send_command_sync {
@@ -211,8 +214,11 @@ sub _send_command_sync {
 
     my $id  = $self->_req_id;
     $self->_req_id($id + 1);
-    eval { $self->_socket->print(encode_json({ command => $cmd, request_id => $id }) . "\n") }
-        or return;
+    eval { $self->_socket->print(encode_json({ command => $cmd, request_id => $id }) . "\n") };
+    if ($@) {
+        $log->warn("IPC send_sync failed: $@") if $log;
+        return;
+    }
 
     my $deadline = time() + $IPC_TIMEOUT;
     my $buf      = '';

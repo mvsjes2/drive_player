@@ -15,6 +15,9 @@ requires 'Type::Tiny';
 requires 'SQL::Translator', '0.11018';
 requires 'YAML::XS';
 
+# Optional: enables reading embedded FLAC tags during metadata fetch
+recommends 'Audio::FLAC::Header';
+
 on test => sub {
     requires 'Mock::MonkeyPatch';
     requires 'Module::Load';

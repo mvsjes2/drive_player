@@ -295,6 +295,52 @@ sub ffprobe_available {
     return -x '/usr/bin/ffprobe' || -x '/usr/local/bin/ffprobe';
 }
 
+sub flac_available {
+    return eval { require Audio::FLAC::Header; 1 } // 0;
+}
+
+# Read embedded Vorbis Comment tags + duration from a FLAC file on Drive.
+# Downloads only the first 512 KB (enough for any FLAC header).
+# Returns a hashref of metadata fields, or undef on failure/no tags.
+sub read_embedded_tags {
+    my ($self, $drive_id) = @_;
+    return unless flac_available();
+
+    my $tmpfile = $self->_download_partial($drive_id, 512 * 1024);
+    return unless $tmpfile;
+
+    my $flac = eval { Audio::FLAC::Header->new($tmpfile) };
+    unlink $tmpfile;
+    return unless $flac;
+
+    my $raw  = $flac->tags() // {};
+    my %tags = map { lc($_) => $raw->{$_} } keys %$raw;
+
+    my %meta;
+    $meta{title}        = $tags{title}       if $tags{title};
+    $meta{artist}       = $tags{artist}      if $tags{artist};
+    $meta{album}        = $tags{album}       if $tags{album};
+    $meta{genre}        = $tags{genre}       if $tags{genre};
+    $meta{composer}     = $tags{composer}    if $tags{composer};
+    $meta{comment}      = $tags{comment}     if $tags{comment};
+    if ($tags{tracknumber} && $tags{tracknumber} =~ /^(\d+)/) {
+        $meta{track_number} = $1 + 0;
+    }
+    if ($tags{date} && $tags{date} =~ /^(\d{4})/) {
+        $meta{year} = $1 + 0;
+    }
+
+    # Duration from FLAC stream info block
+    my $info = $flac->info();
+    if ($info && $info->{TOTALSAMPLES} && $info->{SAMPLERATE}) {
+        $meta{duration_ms} = int($info->{TOTALSAMPLES} / $info->{SAMPLERATE} * 1000);
+    } elsif ($flac->{trackTotalLengthSeconds}) {
+        $meta{duration_ms} = int($flac->{trackTotalLengthSeconds} * 1000);
+    }
+
+    return %meta ? \%meta : undef;
+}
+
 # Probe a Drive file for duration (milliseconds) using ffprobe.
 # Returns undef if ffprobe is unavailable or the probe fails.
 sub probe_duration_ms {
@@ -325,7 +371,7 @@ sub probe_duration_ms {
 sub _fpcalc_available { fpcalc_available() }
 
 sub _download_partial {
-    my ($self, $drive_id) = @_;
+    my ($self, $drive_id, $max_bytes) = @_;
     my $token = $self->token_fn->();
     unless ($token) {
         $log->warn("Fingerprint: no bearer token available") if $log;
@@ -333,7 +379,7 @@ sub _download_partial {
     }
 
     my $url     = sprintf $DRIVE_URL, uri_escape_utf8($drive_id);
-    my $max     = $DOWNLOAD_MB * 1024 * 1024 - 1;
+    my $max     = ($max_bytes // ($DOWNLOAD_MB * 1024 * 1024)) - 1;
     my $ua      = HTTP::Tiny->new(agent => $USER_AGENT, timeout => 30);
     my ($fh, $tmpfile) = tempfile(SUFFIX => '.audio', UNLINK => 0);
     binmode $fh;

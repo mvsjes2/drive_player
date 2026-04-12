@@ -592,10 +592,10 @@ sub _play_index {
 sub _toggle_play {
     my ($self) = @_;
     if (!$self->player || $self->player->state eq 'stop') {
-        my $sel          = $self->track_view->get_selection();
-        my ($model, $paths) = $sel->get_selected_rows();
-        if ($paths && @$paths) {
-            my ($ridx) = $paths->[0]->get_indices();
+        my $sel = $self->track_view->get_selection();
+        my (undef, @paths) = $sel->get_selected_rows();
+        if (@paths) {
+            my ($ridx) = $paths[0]->get_indices();
             $self->_play_index($ridx);
         } else {
             $self->_play_index(0);

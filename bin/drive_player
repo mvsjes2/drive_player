@@ -3,7 +3,7 @@
 use strict;
 use warnings;
 use FindBin;
-use lib "$FindBin::RealBin/lib";
+use lib "$FindBin::RealBin/../lib";
 
 use DrivePlayer::GUI;
 
@@ -13,11 +13,11 @@ __END__
 
 =head1 NAME
 
-drive_player.pl - GTK3 music player for Google Drive
+drive_player - GTK3 music player for Google Drive
 
 =head1 SYNOPSIS
 
-  perl drive_player.pl
+  drive_player
 
 =head1 SETUP
 

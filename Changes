@@ -1,0 +1,8 @@
+Revision history for Perl extension DrivePlayer.
+
+0.1.0 2026-04-12
+        - Initial release.
+        - GTK3 music player for Google Drive with SQLite local library.
+        - Google Sheets sync for cross-device metadata portability.
+        - AcoustID / iTunes / MusicBrainz metadata fetching.
+        - Incremental folder sync with large-deletion confirmation.

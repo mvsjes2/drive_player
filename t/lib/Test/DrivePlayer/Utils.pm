@@ -27,8 +27,8 @@ use constant FAKE_TRACK_ID    => 'fake_track_drive_id_001';
 
 sub fake_config {
     my (%args) = @_;
-    load('DrivePlayer::Config');
-    return DrivePlayer::Config->new(%args);
+    load('App::DrivePlayer::Config');
+    return App::DrivePlayer::Config->new(%args);
 }
 
 sub fake_db {
@@ -37,8 +37,8 @@ sub fake_db {
         require File::Temp;
         File::Temp::tempfile(SUFFIX => '.db', UNLINK => 1);
     };
-    load('DrivePlayer::DB');
-    return DrivePlayer::DB->new(path => $path);
+    load('App::DrivePlayer::DB');
+    return App::DrivePlayer::DB->new(path => $path);
 }
 
 sub fake_drive {
@@ -53,14 +53,14 @@ sub fake_auth {
 
 sub fake_scanner {
     my (%args) = @_;
-    load('DrivePlayer::Scanner');
-    return DrivePlayer::Scanner->new(%args);
+    load('App::DrivePlayer::Scanner');
+    return App::DrivePlayer::Scanner->new(%args);
 }
 
 sub fake_player {
     my (%args) = @_;
-    load('DrivePlayer::Player');
-    return DrivePlayer::Player->new(
+    load('App::DrivePlayer::Player');
+    return App::DrivePlayer::Player->new(
         auth => fake_auth(%args),
         %args,
     );

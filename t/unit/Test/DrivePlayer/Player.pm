@@ -15,7 +15,7 @@ use parent 'Test::DrivePlayer::TestBase';
 sub setup : Tests(setup) {
     my ($self) = @_;
     $self->SUPER::setup();
-    load('DrivePlayer::Player');
+    load('App::DrivePlayer::Player');
     return;
 }
 
@@ -28,7 +28,7 @@ sub constructor : Tests(3) {
     my ($self) = @_;
 
     my $p = fake_player();
-    isa_ok $p, 'DrivePlayer::Player', 'constructor returns Player';
+    isa_ok $p, 'App::DrivePlayer::Player', 'constructor returns Player';
     is $p->state, 'stop', 'initial state is stop';
     is $p->current_track, undef, 'no current track initially';
 }
@@ -36,7 +36,7 @@ sub constructor : Tests(3) {
 sub constructor_requires_auth : Tests(1) {
     my ($self) = @_;
 
-    throws_ok { DrivePlayer::Player->new() }
+    throws_ok { App::DrivePlayer::Player->new() }
         qr/required/i,
         'constructor requires auth';
 }
@@ -45,7 +45,7 @@ sub constructor_callbacks_optional : Tests(1) {
     my ($self) = @_;
 
     lives_ok {
-        DrivePlayer::Player->new(auth => fake_auth())
+        App::DrivePlayer::Player->new(auth => fake_auth())
     } 'constructor without callbacks lives';
 }
 
@@ -71,7 +71,7 @@ sub bearer_token_cached : Tests(2) {
         return ['Authorization', 'Bearer cached_token'];
     });
 
-    my $p = DrivePlayer::Player->new(auth => $auth);
+    my $p = App::DrivePlayer::Player->new(auth => $auth);
     $p->_bearer_token();
     $p->_bearer_token();
 
@@ -90,7 +90,7 @@ sub bearer_token_refreshes_when_stale : Tests(2) {
         return ['Authorization', "Bearer token_call_$call_count"];
     });
 
-    my $p = DrivePlayer::Player->new(auth => $auth);
+    my $p = App::DrivePlayer::Player->new(auth => $auth);
     $p->_bearer_token();
 
     # Simulate stale token by backdating the token_time
@@ -117,7 +117,7 @@ sub bearer_token_clears_auth_cache : Tests(1) {
         return $a->{headers};
     });
 
-    my $p = DrivePlayer::Player->new(auth => $auth);
+    my $p = App::DrivePlayer::Player->new(auth => $auth);
     $p->_token_time(time() - 4000);
     $p->_token('Bearer stale');
     $p->_bearer_token();
@@ -258,7 +258,7 @@ sub play_uses_drive_url_and_token : Tests(3) {
     $self->_mock('socket', 'IO::Socket::UNIX',  'new',       sub { $mock_socket });
 
     # Intercept fork to avoid spawning real mpv
-    $self->_mock('fork_call', 'DrivePlayer::Player', '_ensure_mpv', sub {
+    $self->_mock('fork_call', 'App::DrivePlayer::Player', '_ensure_mpv', sub {
         my ($player) = @_;
         $player->_socket($mock_socket);
         $player->_mpv_pid($$);   # use our own PID as fake mpv pid

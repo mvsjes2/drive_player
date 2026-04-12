@@ -5,9 +5,9 @@ use warnings;
 use FindBin;
 use lib "$FindBin::RealBin/../lib";
 
-use DrivePlayer::GUI;
+use App::DrivePlayer::GUI;
 
-DrivePlayer::GUI->new()->run();
+App::DrivePlayer::GUI->new()->run();
 
 __END__
 

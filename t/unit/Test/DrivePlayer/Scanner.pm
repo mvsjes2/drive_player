@@ -14,7 +14,7 @@ use parent 'Test::DrivePlayer::TestBase';
 sub setup : Tests(setup) {
     my ($self) = @_;
     $self->SUPER::setup();
-    Module::Load::load('DrivePlayer::Scanner');
+    Module::Load::load('App::DrivePlayer::Scanner');
     $self->{db} = fake_db($self->_temp_db_path);
     return;
 }
@@ -26,11 +26,11 @@ sub db { $_[0]->{db} }
 sub parse_filename_artist_title : Tests(4) {
     my ($self) = @_;
 
-    my ($title, $artist) = DrivePlayer::Scanner::_parse_filename('Queen - Bohemian Rhapsody.mp3');
+    my ($title, $artist) = App::DrivePlayer::Scanner::_parse_filename('Queen - Bohemian Rhapsody.mp3');
     is $title,  'Bohemian Rhapsody', 'artist-title: title correct';
     is $artist, 'Queen',             'artist-title: artist correct';
 
-    my ($title2, $artist2) = DrivePlayer::Scanner::_parse_filename('Led Zeppelin – Kashmir.flac');
+    my ($title2, $artist2) = App::DrivePlayer::Scanner::_parse_filename('Led Zeppelin – Kashmir.flac');
     is $title2,  'Kashmir',        'em-dash separator works: title';
     is $artist2, 'Led Zeppelin',   'em-dash separator works: artist';
 }
@@ -39,13 +39,13 @@ sub parse_filename_track_artist_title : Tests(4) {
     my ($self) = @_;
 
     my ($title, $artist, undef, $track_num) =
-        DrivePlayer::Scanner::_parse_filename('01 - Queen - Bohemian Rhapsody.mp3');
+        App::DrivePlayer::Scanner::_parse_filename('01 - Queen - Bohemian Rhapsody.mp3');
     is $title,     'Bohemian Rhapsody', 'track-artist-title: title correct';
     is $artist,    'Queen',             'track-artist-title: artist correct';
     is $track_num, 1,                   'track-artist-title: track_number correct';
 
     (undef, undef, undef, my $tn2) =
-        DrivePlayer::Scanner::_parse_filename('11. Artist - Title.mp3');
+        App::DrivePlayer::Scanner::_parse_filename('11. Artist - Title.mp3');
     is $tn2, 11, 'dot separator for track number';
 }
 
@@ -53,7 +53,7 @@ sub parse_filename_track_title : Tests(3) {
     my ($self) = @_;
 
     my ($title, $artist, undef, $track_num) =
-        DrivePlayer::Scanner::_parse_filename('03 - Stairway to Heaven.flac');
+        App::DrivePlayer::Scanner::_parse_filename('03 - Stairway to Heaven.flac');
     is $title,     'Stairway to Heaven', 'track-title: title correct';
     is $artist,    undef,                'track-title: artist is undef';
     is $track_num, 3,                    'track-title: track_number correct';
@@ -63,7 +63,7 @@ sub parse_filename_title_only : Tests(3) {
     my ($self) = @_;
 
     my ($title, $artist, undef, $track_num) =
-        DrivePlayer::Scanner::_parse_filename('Untitled Track.ogg');
+        App::DrivePlayer::Scanner::_parse_filename('Untitled Track.ogg');
     is $title,     'Untitled Track', 'title-only: title correct';
     is $artist,    undef,            'title-only: artist is undef';
     is $track_num, undef,            'title-only: track_number is undef';
@@ -73,7 +73,7 @@ sub parse_filename_year_extraction : Tests(2) {
     my ($self) = @_;
 
     my ($title, undef, undef, undef, $year) =
-        DrivePlayer::Scanner::_parse_filename('Bohemian Rhapsody (1975).mp3');
+        App::DrivePlayer::Scanner::_parse_filename('Bohemian Rhapsody (1975).mp3');
     is $title, 'Bohemian Rhapsody', 'year stripped from title';
     is $year,  1975,                'year extracted correctly';
 }
@@ -82,7 +82,7 @@ sub parse_filename_year_bracket : Tests(2) {
     my ($self) = @_;
 
     my ($title, undef, undef, undef, $year) =
-        DrivePlayer::Scanner::_parse_filename('Kashmir [1975].flac');
+        App::DrivePlayer::Scanner::_parse_filename('Kashmir [1975].flac');
     is $title, 'Kashmir', 'bracket year stripped from title';
     is $year,  1975,      'bracket year extracted';
 }
@@ -90,7 +90,7 @@ sub parse_filename_year_bracket : Tests(2) {
 sub parse_filename_strips_extension : Tests(1) {
     my ($self) = @_;
 
-    my ($title) = DrivePlayer::Scanner::_parse_filename('My Song.flac');
+    my ($title) = App::DrivePlayer::Scanner::_parse_filename('My Song.flac');
     is $title, 'My Song', 'extension stripped';
 }
 

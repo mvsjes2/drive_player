@@ -1,6 +1,6 @@
-package DrivePlayer::SheetDB;
+package App::DrivePlayer::SheetDB;
 
-use DrivePlayer::Setup;
+use App::DrivePlayer::Setup;
 use Google::RestApi::DriveApi3;
 use Google::RestApi::SheetsApi4;
 
@@ -243,13 +243,13 @@ __END__
 
 =head1 NAME
 
-DrivePlayer::SheetDB - Sync the DrivePlayer library to/from a Google Sheet
+App::DrivePlayer::SheetDB - Sync the DrivePlayer library to/from a Google Sheet
 
 =head1 SYNOPSIS
 
-  use DrivePlayer::SheetDB;
+  use App::DrivePlayer::SheetDB;
 
-  my $sheet = DrivePlayer::SheetDB->new(
+  my $sheet = App::DrivePlayer::SheetDB->new(
       api            => $google_rest_api,
       spreadsheet_id => $id,             # omit when calling create()
   );

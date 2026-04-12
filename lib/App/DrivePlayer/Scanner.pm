@@ -1,6 +1,6 @@
-package DrivePlayer::Scanner;
+package App::DrivePlayer::Scanner;
 
-use DrivePlayer::Setup;
+use App::DrivePlayer::Setup;
 
 my $FOLDER_MIME  = 'application/vnd.google-apps.folder';
 my $DRIVE_FIELDS = 'files(id,name,mimeType,size,modifiedTime,parents,videoMediaMetadata)';
@@ -215,15 +215,15 @@ __END__
 
 =head1 NAME
 
-DrivePlayer::Scanner - Recursively scan a Google Drive folder and store tracks
+App::DrivePlayer::Scanner - Recursively scan a Google Drive folder and store tracks
 
 =head1 SYNOPSIS
 
-  use DrivePlayer::Scanner;
+  use App::DrivePlayer::Scanner;
 
-  my $scanner = DrivePlayer::Scanner->new(
+  my $scanner = App::DrivePlayer::Scanner->new(
       drive          => $drive_api,       # Google::RestApi::DriveApi3
-      db             => $db,              # DrivePlayer::DB
+      db             => $db,              # App::DrivePlayer::DB
       on_progress    => sub { say $_[0] },
       on_track_found => sub { my $track = shift; ... },
   );
@@ -267,7 +267,7 @@ method matching that interface).
 
   is: ro, required: 1
 
-A L<DrivePlayer::DB> instance used to persist scan results.
+A L<App::DrivePlayer::DB> instance used to persist scan results.
 
 =head2 on_progress
 
@@ -287,7 +287,7 @@ Called with a track hashref each time an audio file is successfully stored.
 
 =head2 new
 
-  my $scanner = DrivePlayer::Scanner->new(%args);
+  my $scanner = App::DrivePlayer::Scanner->new(%args);
 
 Constructor.  C<drive> and C<db> are required.
 

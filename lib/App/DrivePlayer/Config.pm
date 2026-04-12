@@ -1,6 +1,6 @@
-package DrivePlayer::Config;
+package App::DrivePlayer::Config;
 
-use DrivePlayer::Setup;
+use App::DrivePlayer::Setup;
 use File::Basename  qw( dirname );
 use File::Path      qw( make_path );
 use YAML::XS        qw( LoadFile DumpFile );
@@ -135,14 +135,14 @@ __END__
 
 =head1 NAME
 
-DrivePlayer::Config - Load, persist and query DrivePlayer configuration
+App::DrivePlayer::Config - Load, persist and query DrivePlayer configuration
 
 =head1 SYNOPSIS
 
-  use DrivePlayer::Config;
+  use App::DrivePlayer::Config;
 
-  my $cfg = DrivePlayer::Config->new();                      # default path
-  my $cfg = DrivePlayer::Config->new(config_file => $path);  # explicit path
+  my $cfg = App::DrivePlayer::Config->new();                      # default path
+  my $cfg = App::DrivePlayer::Config->new(config_file => $path);  # explicit path
 
   # Read settings
   my $auth    = $cfg->auth_config;     # hashref for Google::RestApi->new
@@ -176,7 +176,7 @@ F<~/.config/drive_player/config.yaml>.
 
 =head2 new
 
-  my $cfg = DrivePlayer::Config->new(%args);
+  my $cfg = App::DrivePlayer::Config->new(%args);
 
 Constructor.  Accepts C<config_file> as an optional named argument.
 

@@ -1,4 +1,4 @@
-package DrivePlayer::Schema::Result::Track;
+package App::DrivePlayer::Schema::Result::Track;
 
 use strict;
 use warnings;
@@ -84,7 +84,7 @@ __PACKAGE__->set_primary_key('id');
 __PACKAGE__->add_unique_constraint( unique_drive_id => ['drive_id'] );
 
 __PACKAGE__->belongs_to(
-    folder => 'DrivePlayer::Schema::Result::Folder',
+    folder => 'App::DrivePlayer::Schema::Result::Folder',
     'folder_id',
 );
 
@@ -102,12 +102,12 @@ __END__
 
 =head1 NAME
 
-DrivePlayer::Schema::Result::Track - DBIx::Class result for the tracks table
+App::DrivePlayer::Schema::Result::Track - DBIx::Class result for the tracks table
 
 =head1 DESCRIPTION
 
 Represents a single audio file discovered during a Drive scan.  Belongs to
-a L<DrivePlayer::Schema::Result::Folder>.
+a L<App::DrivePlayer::Schema::Result::Folder>.
 
 Columns: C<id>, C<drive_id>, C<title>, C<artist>, C<album>,
 C<track_number>, C<year>, C<duration_ms>, C<size>, C<mime_type>,

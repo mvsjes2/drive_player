@@ -1,4 +1,4 @@
-package DrivePlayer::Schema;
+package App::DrivePlayer::Schema;
 
 use strict;
 use warnings;
@@ -49,7 +49,7 @@ __END__
 
 =head1 NAME
 
-DrivePlayer::Schema - DBIx::Class schema for the DrivePlayer SQLite database
+App::DrivePlayer::Schema - DBIx::Class schema for the DrivePlayer SQLite database
 
 =head1 DESCRIPTION
 
@@ -62,7 +62,7 @@ correctly.
 
 =head2 connect_and_deploy
 
-  my $schema = DrivePlayer::Schema->connect_and_deploy($path);
+  my $schema = App::DrivePlayer::Schema->connect_and_deploy($path);
 
 Connect to the SQLite database at C<$path>, enable WAL journal mode and
 foreign-key enforcement, and deploy the schema (create tables) if the

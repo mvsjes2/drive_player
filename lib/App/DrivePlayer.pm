@@ -1,4 +1,4 @@
-package DrivePlayer;
+package App::DrivePlayer;
 
 use strict;
 use warnings;
@@ -11,7 +11,7 @@ __END__
 
 =head1 NAME
 
-DrivePlayer - GTK3 music player for Google Drive
+App::DrivePlayer - GTK3 music player for Google Drive
 
 =head1 VERSION
 
@@ -19,12 +19,12 @@ DrivePlayer - GTK3 music player for Google Drive
 
 =head1 DESCRIPTION
 
-DrivePlayer is a GTK3 desktop application that streams audio files stored in
-Google Drive.  It maintains a local SQLite library of scanned folders and
+App::DrivePlayer is a GTK3 desktop application that streams audio files stored
+in Google Drive.  It maintains a local SQLite library of scanned folders and
 tracks, and can sync metadata to and from a Google Spreadsheet for use across
 multiple devices.
 
-See L<DrivePlayer::GUI> for the main entry point, or run the installed
+See L<App::DrivePlayer::GUI> for the main entry point, or run the installed
 C<drive_player> script.
 
 =head1 AUTHOR

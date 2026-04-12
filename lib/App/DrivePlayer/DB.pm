@@ -1,9 +1,9 @@
-package DrivePlayer::DB;
+package App::DrivePlayer::DB;
 
-use DrivePlayer::Setup;
+use App::DrivePlayer::Setup;
 use File::Path       qw( make_path );
 use File::Basename   qw( dirname );
-use DrivePlayer::Schema;
+use App::DrivePlayer::Schema;
 
 has path => (
     is       => 'ro',
@@ -13,14 +13,14 @@ has path => (
 
 has schema => (
     is      => 'lazy',
-    isa     => InstanceOf['DrivePlayer::Schema'],
+    isa     => InstanceOf['App::DrivePlayer::Schema'],
     builder => '_build_schema',
 );
 
 sub _build_schema {
     my ($self) = @_;
     make_path(dirname($self->path)) unless -d dirname($self->path);
-    return DrivePlayer::Schema->connect_and_deploy($self->path);
+    return App::DrivePlayer::Schema->connect_and_deploy($self->path);
 }
 
 # Trigger schema build (and thus table creation) at construction time.
@@ -418,13 +418,13 @@ __END__
 
 =head1 NAME
 
-DrivePlayer::DB - SQLite database facade for the DrivePlayer library
+App::DrivePlayer::DB - SQLite database facade for the DrivePlayer library
 
 =head1 SYNOPSIS
 
-  use DrivePlayer::DB;
+  use App::DrivePlayer::DB;
 
-  my $db = DrivePlayer::DB->new(path => '/path/to/music.db');
+  my $db = App::DrivePlayer::DB->new(path => '/path/to/music.db');
 
   # Scan-folder management
   my $sf = $db->upsert_scan_folder($drive_id, 'My Music');
@@ -445,7 +445,7 @@ DrivePlayer::DB - SQLite database facade for the DrivePlayer library
 
 =head1 DESCRIPTION
 
-A thin L<Moo> facade over a L<DrivePlayer::Schema> (L<DBIx::Class>) schema.
+A thin L<Moo> facade over a L<App::DrivePlayer::Schema> (L<DBIx::Class>) schema.
 Handles database creation on first use and exposes a simple hashref-based
 API so the rest of the application never touches DBIx::Class directly.
 
@@ -463,7 +463,7 @@ created automatically if it does not exist.
 
 =head2 schema
 
-  is: lazy, isa: DrivePlayer::Schema
+  is: lazy, isa: App::DrivePlayer::Schema
 
 The underlying DBIx::Class schema object.  Built automatically on first
 access; the database file and tables are created at that point if needed.
@@ -472,7 +472,7 @@ access; the database file and tables are created at that point if needed.
 
 =head2 new
 
-  my $db = DrivePlayer::DB->new(path => $path);
+  my $db = App::DrivePlayer::DB->new(path => $path);
 
 Constructor.  The schema (and the SQLite file) is initialised immediately.
 

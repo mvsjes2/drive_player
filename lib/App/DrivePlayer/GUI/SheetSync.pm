@@ -1,4 +1,4 @@
-package DrivePlayer::GUI::SheetSync;
+package App::DrivePlayer::GUI::SheetSync;
 
 # Moo role: Google Sheet synchronisation.
 
@@ -10,7 +10,7 @@ use Moo::Role;
 use Glib qw( FALSE );
 use Gtk3  '-init';
 
-use DrivePlayer::SheetDB;
+use App::DrivePlayer::SheetDB;
 
 sub _sheet_db {
     my ($self) = @_;
@@ -22,7 +22,7 @@ sub _sheet_db {
         return;
     };
     return unless $self->_init_api();
-    return DrivePlayer::SheetDB->new(
+    return App::DrivePlayer::SheetDB->new(
         api            => $self->rest_api,
         spreadsheet_id => $sid,
     );
@@ -144,7 +144,7 @@ sub _auto_sync_from_sheet_on_new_db {
         $log->info("New-device sheet restore: found spreadsheet $sheet_id") if $log;
     }
 
-    my $sheet = DrivePlayer::SheetDB->new(
+    my $sheet = App::DrivePlayer::SheetDB->new(
         api            => $api,
         spreadsheet_id => $sheet_id,
     );
@@ -184,11 +184,11 @@ __END__
 
 =head1 NAME
 
-DrivePlayer::GUI::SheetSync - Role for Google Sheet synchronisation
+App::DrivePlayer::GUI::SheetSync - Role for Google Sheet synchronisation
 
 =head1 DESCRIPTION
 
-A L<Moo::Role> consumed by L<DrivePlayer::GUI> that handles syncing the
+A L<Moo::Role> consumed by L<App::DrivePlayer::GUI> that handles syncing the
 local library to and from a Google Sheets spreadsheet.
 
 =cut

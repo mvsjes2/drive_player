@@ -5,10 +5,10 @@ use 5.024000;
 use ExtUtils::MakeMaker;
 
 WriteMakefile(
-    NAME          => 'DrivePlayer',
+    NAME          => 'App::DrivePlayer',
     AUTHOR        => 'Robin Murray <mvsjes@cpan.org>',
-    ABSTRACT_FROM => 'lib/DrivePlayer.pm',
-    VERSION_FROM  => 'lib/DrivePlayer.pm',
+    ABSTRACT_FROM => 'lib/App/DrivePlayer.pm',
+    VERSION_FROM  => 'lib/App/DrivePlayer.pm',
     EXE_FILES     => ['bin/drive_player'],
     PREREQ_PM     => {
         'DBD::SQLite'      => 0,

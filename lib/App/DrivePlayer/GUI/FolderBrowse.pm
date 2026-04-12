@@ -1,4 +1,4 @@
-package DrivePlayer::GUI::FolderBrowse;
+package App::DrivePlayer::GUI::FolderBrowse;
 
 # Moo role: Drive folder browsing and management dialogs.
 
@@ -278,11 +278,11 @@ __END__
 
 =head1 NAME
 
-DrivePlayer::GUI::FolderBrowse - Role for Drive folder browsing dialogs
+App::DrivePlayer::GUI::FolderBrowse - Role for Drive folder browsing dialogs
 
 =head1 DESCRIPTION
 
-A L<Moo::Role> consumed by L<DrivePlayer::GUI> that provides dialogs for
+A L<Moo::Role> consumed by L<App::DrivePlayer::GUI> that provides dialogs for
 adding, browsing, and managing Google Drive music folders.
 
 =cut

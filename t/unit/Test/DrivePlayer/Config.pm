@@ -20,7 +20,7 @@ sub constructor_defaults : Tests(7) {
     # Use a nonexistent path so built-in defaults are always used,
     # regardless of any real config file at the default location.
     my $cfg = fake_config(config_file => '/nonexistent/drive_player/config.yaml');
-    isa_ok $cfg, 'DrivePlayer::Config', 'Constructor returns';
+    isa_ok $cfg, 'App::DrivePlayer::Config', 'Constructor returns';
     ok defined $cfg->config_file,  'config_file is defined';
     ok defined $cfg->db_path,      'db_path is defined';
     ok defined $cfg->log_file,     'log_file is defined';

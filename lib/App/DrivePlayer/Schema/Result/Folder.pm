@@ -1,4 +1,4 @@
-package DrivePlayer::Schema::Result::Folder;
+package App::DrivePlayer::Schema::Result::Folder;
 
 use strict;
 use warnings;
@@ -39,12 +39,12 @@ __PACKAGE__->set_primary_key('id');
 __PACKAGE__->add_unique_constraint( unique_drive_id => ['drive_id'] );
 
 __PACKAGE__->belongs_to(
-    scan_folder => 'DrivePlayer::Schema::Result::ScanFolder',
+    scan_folder => 'App::DrivePlayer::Schema::Result::ScanFolder',
     'scan_folder_id',
 );
 
 __PACKAGE__->has_many(
-    tracks => 'DrivePlayer::Schema::Result::Track',
+    tracks => 'App::DrivePlayer::Schema::Result::Track',
     'folder_id',
     { cascade_delete => 1 },
 );
@@ -60,13 +60,13 @@ __END__
 
 =head1 NAME
 
-DrivePlayer::Schema::Result::Folder - DBIx::Class result for the folders table
+App::DrivePlayer::Schema::Result::Folder - DBIx::Class result for the folders table
 
 =head1 DESCRIPTION
 
 Represents a Drive folder (root or subfolder) encountered during a scan.
-Belongs to a L<DrivePlayer::Schema::Result::ScanFolder> and has many
-L<DrivePlayer::Schema::Result::Track> children (cascade-deleted with the
+Belongs to a L<App::DrivePlayer::Schema::Result::ScanFolder> and has many
+L<App::DrivePlayer::Schema::Result::Track> children (cascade-deleted with the
 folder).
 
 Columns: C<id>, C<drive_id>, C<name>, C<parent_drive_id>, C<path>,

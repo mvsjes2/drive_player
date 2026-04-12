@@ -1,19 +1,19 @@
-package DrivePlayer::GUI;
+package App::DrivePlayer::GUI;
 
 # GTK3-based music player GUI.
 
-use DrivePlayer::Setup;
+use App::DrivePlayer::Setup;
 use Glib            qw( TRUE FALSE );
 use Gtk3            '-init';
 use POSIX           qw( WNOHANG );
 
 use Google::RestApi;
 use Google::RestApi::DriveApi3;
-use DrivePlayer::Config;
-use DrivePlayer::DB;
-use DrivePlayer::Player;
-use DrivePlayer::Scanner;
-use DrivePlayer::SheetDB;
+use App::DrivePlayer::Config;
+use App::DrivePlayer::DB;
+use App::DrivePlayer::Player;
+use App::DrivePlayer::Scanner;
+use App::DrivePlayer::SheetDB;
 
 Readonly my $POLL_INTERVAL_MS => 500;
 
@@ -21,13 +21,13 @@ my $log = do { eval { require Log::Log4perl; Log::Log4perl->get_logger(__PACKAGE
 
 has config => (
     is      => 'lazy',
-    isa     => InstanceOf['DrivePlayer::Config'],
-    builder => sub { DrivePlayer::Config->new() },
+    isa     => InstanceOf['App::DrivePlayer::Config'],
+    builder => sub { App::DrivePlayer::Config->new() },
 );
 
 has db => (
     is      => 'lazy',
-    isa     => InstanceOf['DrivePlayer::DB'],
+    isa     => InstanceOf['App::DrivePlayer::DB'],
     builder => '_build_db',
 );
 
@@ -60,9 +60,9 @@ has search_entry       => ( is => 'rw' );
 has statusbar          => ( is => 'rw' );
 has _status_ctx        => ( is => 'rw' );
 with qw(
-    DrivePlayer::GUI::MetadataFetch
-    DrivePlayer::GUI::SheetSync
-    DrivePlayer::GUI::FolderBrowse
+    App::DrivePlayer::GUI::MetadataFetch
+    App::DrivePlayer::GUI::SheetSync
+    App::DrivePlayer::GUI::FolderBrowse
 );
 
 sub _bearer_token {
@@ -74,7 +74,7 @@ sub _bearer_token {
 
 sub _build_db {
     my ($self) = @_;
-    return DrivePlayer::DB->new(path => $self->config->db_path());
+    return App::DrivePlayer::DB->new(path => $self->config->db_path());
 }
 
 sub BUILD {
@@ -152,7 +152,7 @@ sub _init_api {
     $self->rest_api($api);
     $self->drive(Google::RestApi::DriveApi3->new(api => $api));
 
-    $self->player(DrivePlayer::Player->new(
+    $self->player(App::DrivePlayer::Player->new(
         auth            => $api->auth(),
         on_track_end    => sub { $self->_on_track_end() },
         on_position     => sub { $self->_on_position(@_) },
@@ -786,7 +786,7 @@ sub _show_sync_dialog {
     my $current        = 0;
     my $stopped        = FALSE;
 
-    my $scanner = DrivePlayer::Scanner->new(
+    my $scanner = App::DrivePlayer::Scanner->new(
         drive    => $self->drive,
         db       => $self->db,
         on_progress => sub {
@@ -921,7 +921,7 @@ sub _settings_dialog {
 
     # Helper: refresh the fpcalc status label
     my $refresh_fp_status = sub {
-        if (DrivePlayer::MetadataFetcher::fpcalc_available()) {
+        if (App::DrivePlayer::MetadataFetcher::fpcalc_available()) {
             $fp_status->set_markup('<span foreground="#2d862d"><b>Installed</b></span>');
             $install_btn->hide();
         }
@@ -1027,7 +1027,7 @@ sub _settings_dialog {
         } else {
             $create_btn->set_label('Creating…');
             Gtk3::main_iteration_do(FALSE) while Gtk3::events_pending();
-            my $sheet = DrivePlayer::SheetDB->new(api => $self->rest_api);
+            my $sheet = App::DrivePlayer::SheetDB->new(api => $self->rest_api);
             $id = eval { $sheet->create() };
             $self->_show_error("Failed to create spreadsheet:\n$@") if $@;
         }
@@ -1259,13 +1259,13 @@ __END__
 
 =head1 NAME
 
-DrivePlayer::GUI - GTK3 application window for DrivePlayer
+App::DrivePlayer::GUI - GTK3 application window for DrivePlayer
 
 =head1 SYNOPSIS
 
-  use DrivePlayer::GUI;
+  use App::DrivePlayer::GUI;
 
-  DrivePlayer::GUI->new->run;
+  App::DrivePlayer::GUI->new->run;
 
 =head1 DESCRIPTION
 
@@ -1282,18 +1282,18 @@ track list, and playback controls (play/pause, stop, seek, volume).
 =item *
 
 Lazily initialising the Google REST API connection and
-L<DrivePlayer::Player> on first use, so start-up is fast even when network
+L<App::DrivePlayer::Player> on first use, so start-up is fast even when network
 access is unavailable.
 
 =item *
 
-Running folder scans (via L<DrivePlayer::Scanner>) in a background thread
+Running folder scans (via L<App::DrivePlayer::Scanner>) in a background thread
 with live progress reporting.
 
 =item *
 
 Persisting configuration changes (music folder list, OAuth2 credentials)
-through L<DrivePlayer::Config>.
+through L<App::DrivePlayer::Config>.
 
 =back
 
@@ -1304,7 +1304,7 @@ modules.  Not covered by the unit test suite.
 
 =head2 new
 
-  my $gui = DrivePlayer::GUI->new;
+  my $gui = App::DrivePlayer::GUI->new;
 
 Constructs the application object.  The window is not shown until L</run>
 is called.

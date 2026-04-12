@@ -1,9 +1,9 @@
-package DrivePlayer::Player;
+package App::DrivePlayer::Player;
 
 # mpv-based audio player using JSON IPC socket for control.
 # Streams audio directly from Google Drive using Bearer auth headers.
 
-use DrivePlayer::Setup;
+use App::DrivePlayer::Setup;
 use File::Temp      qw( tempfile );
 use IO::Socket::UNIX;
 use JSON::MaybeXS   qw( encode_json decode_json );
@@ -299,13 +299,13 @@ __END__
 
 =head1 NAME
 
-DrivePlayer::Player - mpv-based audio player that streams from Google Drive
+App::DrivePlayer::Player - mpv-based audio player that streams from Google Drive
 
 =head1 SYNOPSIS
 
-  use DrivePlayer::Player;
+  use App::DrivePlayer::Player;
 
-  my $player = DrivePlayer::Player->new(
+  my $player = App::DrivePlayer::Player->new(
       auth             => $auth_obj,      # Google::RestApi::Auth::*
       on_state_change  => sub { my $state = shift; ... },  # 'play','pause','stop'
       on_track_end     => sub { ... },
@@ -368,7 +368,7 @@ values are available from mpv.
 
 =head2 new
 
-  my $player = DrivePlayer::Player->new(%args);
+  my $player = App::DrivePlayer::Player->new(%args);
 
 Constructor.  C<auth> is required; all callbacks are optional.
 

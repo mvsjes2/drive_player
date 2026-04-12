@@ -1,4 +1,4 @@
-package DrivePlayer::GUI::MetadataFetch;
+package App::DrivePlayer::GUI::MetadataFetch;
 
 # Moo role: background metadata-fetch machinery.
 
@@ -12,7 +12,7 @@ use Gtk3            '-init';
 use JSON::MaybeXS   qw( encode_json decode_json );
 use POSIX           qw( WNOHANG );
 
-use DrivePlayer::MetadataFetcher;
+use App::DrivePlayer::MetadataFetcher;
 
 has _meta_watch_id   => ( is => 'rw', default => sub { undef } );
 has _meta_pid        => ( is => 'rw', default => sub { undef } );
@@ -66,7 +66,7 @@ sub _fetch_all_metadata {
     my $token        = $self->_bearer_token() // q{};
     my $acoustid_key = $self->config->acoustid_key();
     my $use_fp       = $acoustid_key
-                    && DrivePlayer::MetadataFetcher::fpcalc_available()
+                    && App::DrivePlayer::MetadataFetcher::fpcalc_available()
                     && $token;
     my $total = scalar @tracks;
 
@@ -80,7 +80,7 @@ sub _fetch_all_metadata {
         close $reader;
         $writer->autoflush(1);
 
-        my $fetcher = DrivePlayer::MetadataFetcher->new(
+        my $fetcher = App::DrivePlayer::MetadataFetcher->new(
             acoustid_key => $acoustid_key,
             token_fn     => sub { $token },
         );
@@ -110,9 +110,9 @@ sub _fetch_all_metadata {
 
             # Probe duration if the track doesn't have one yet
             my $duration_ms;
-            if (!$track->{duration_ms} && DrivePlayer::MetadataFetcher::ffprobe_available()) {
+            if (!$track->{duration_ms} && App::DrivePlayer::MetadataFetcher::ffprobe_available()) {
                 $duration_ms = eval {
-                    DrivePlayer::MetadataFetcher::probe_duration_ms(
+                    App::DrivePlayer::MetadataFetcher::probe_duration_ms(
                         undef, $track->{drive_id}, $token,
                     )
                 };
@@ -245,7 +245,7 @@ sub _fetch_track_metadata {
     $self->_set_status('Looking up metadata…');
     $yield->();
 
-    my $fetcher = DrivePlayer::MetadataFetcher->new(
+    my $fetcher = App::DrivePlayer::MetadataFetcher->new(
         yield        => $yield,
         acoustid_key => $self->config->acoustid_key(),
         token_fn     => sub { $self->_bearer_token() },
@@ -258,7 +258,7 @@ sub _fetch_track_metadata {
 
     unless ($meta) {
         my $key      = $self->config->acoustid_key();
-        my $have_fp  = DrivePlayer::MetadataFetcher::fpcalc_available();
+        my $have_fp  = App::DrivePlayer::MetadataFetcher::fpcalc_available();
 
         if (!$key) {
             $self->_set_status('Text search: no match. Fingerprinting skipped: no AcoustID key set.');
@@ -299,11 +299,11 @@ __END__
 
 =head1 NAME
 
-DrivePlayer::GUI::MetadataFetch - Role for background metadata fetching
+App::DrivePlayer::GUI::MetadataFetch - Role for background metadata fetching
 
 =head1 DESCRIPTION
 
-A L<Moo::Role> consumed by L<DrivePlayer::GUI> that handles background
+A L<Moo::Role> consumed by L<App::DrivePlayer::GUI> that handles background
 metadata fetching via a forked child process.
 
 =cut

@@ -1,6 +1,6 @@
-package DrivePlayer::MetadataFetcher;
+package App::DrivePlayer::MetadataFetcher;
 
-use DrivePlayer::Setup;
+use App::DrivePlayer::Setup;
 use File::Temp   qw( tempfile );
 use HTTP::Tiny;
 use JSON::PP     qw( decode_json );
@@ -428,13 +428,13 @@ __END__
 
 =head1 NAME
 
-DrivePlayer::MetadataFetcher - Fetch track metadata from iTunes, MusicBrainz, and AcoustID
+App::DrivePlayer::MetadataFetcher - Fetch track metadata from iTunes, MusicBrainz, and AcoustID
 
 =head1 SYNOPSIS
 
-  use DrivePlayer::MetadataFetcher;
+  use App::DrivePlayer::MetadataFetcher;
 
-  my $fetcher = DrivePlayer::MetadataFetcher->new(
+  my $fetcher = App::DrivePlayer::MetadataFetcher->new(
       yield        => sub { ... },          # optional: pump GTK events during waits
       acoustid_key => 'YOUR_KEY',           # optional: enables fingerprint lookup
       token_fn     => sub { 'Bearer ...' }, # optional: required for fingerprinting
@@ -479,7 +479,7 @@ C<token_fn> to be set, and C<fpcalc> to be installed
 
 =head2 new
 
-  my $f = DrivePlayer::MetadataFetcher->new(%args);
+  my $f = App::DrivePlayer::MetadataFetcher->new(%args);
 
 Optional args: C<yield> (CodeRef), C<acoustid_key> (Str), C<token_fn> (CodeRef
 returning a Bearer token string).

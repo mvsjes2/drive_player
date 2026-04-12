@@ -15,6 +15,7 @@ requires 'Type::Tiny';
 requires 'YAML::XS';
 
 on test => sub {
+    requires 'SQL::Translator', '0.11018';
     requires 'Mock::MonkeyPatch';
     requires 'Module::Load';
     requires 'Test::Class';

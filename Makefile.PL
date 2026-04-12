@@ -27,6 +27,7 @@ WriteMakefile(
     TEST_REQUIRES => {
         'Mock::MonkeyPatch'  => 0,
         'Module::Load'       => 0,
+        'SQL::Translator'    => '0.11018',
         'Test::Class'        => 0,
         'Test::Class::Load'  => 0,
         'Test::Compile'      => 0,

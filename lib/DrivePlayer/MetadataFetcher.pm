@@ -291,6 +291,36 @@ sub fpcalc_available {
     return -x '/usr/bin/fpcalc' || -x '/usr/local/bin/fpcalc';
 }
 
+sub ffprobe_available {
+    return -x '/usr/bin/ffprobe' || -x '/usr/local/bin/ffprobe';
+}
+
+# Probe a Drive file for duration (milliseconds) using ffprobe.
+# Returns undef if ffprobe is unavailable or the probe fails.
+sub probe_duration_ms {
+    my ($class, $drive_id, $token) = @_;
+    return unless ffprobe_available();
+
+    my $ffprobe = -x '/usr/bin/ffprobe' ? '/usr/bin/ffprobe' : 'ffprobe';
+    my $url     = sprintf($DRIVE_URL, $drive_id);
+    my $header  = "Authorization: $token\r\n";
+
+    my $out = q{};
+    my $pid = open(my $fh, '-|', $ffprobe,
+        '-v',            'error',
+        '-headers',      $header,
+        '-show_entries', 'format=duration',
+        '-of',           'default=noprint_wrappers=1:nokey=1',
+        $url,
+    );
+    if ($pid) {
+        $out = do { local $/; <$fh> };
+        close $fh;
+    }
+    return unless $out =~ /^(\d+(?:\.\d+)?)/m;
+    return int($1 * 1000);
+}
+
 # Keep private alias for internal calls
 sub _fpcalc_available { fpcalc_available() }
 

@@ -89,7 +89,9 @@ sub run {
     $self->_auto_sync_from_sheet_on_new_db() if $db_is_new;
     $self->_prune_removed_folders();
     $self->_load_library();
-    $self->_fetch_all_metadata() if $self->db->tracks_needing_metadata();
+    if ($self->db->tracks_needing_metadata()) {
+        $self->_init_api() && $self->_fetch_all_metadata();
+    }
 
     Glib::Timeout->add($POLL_INTERVAL_MS, sub {
         $self->_player_poll();
@@ -1641,11 +1643,22 @@ sub _fetch_all_metadata {
                 $meta = eval { $fetcher->fetch_by_fingerprint(drive_id => $track->{drive_id}) };
             }
 
+            # Probe duration if the track doesn't have one yet
+            my $duration_ms;
+            if (!$track->{duration_ms} && DrivePlayer::MetadataFetcher::ffprobe_available()) {
+                $duration_ms = eval {
+                    DrivePlayer::MetadataFetcher::probe_duration_ms(
+                        undef, $track->{drive_id}, $token,
+                    )
+                };
+            }
+
             print {$writer} encode_json({
-                result   => 1,
-                track_id => $track->{id},
-                track    => $track,
-                meta     => $meta,
+                result      => 1,
+                track_id    => $track->{id},
+                track       => $track,
+                meta        => $meta,
+                duration_ms => $duration_ms,
             }) . "\n";
         }
 
@@ -1695,16 +1708,19 @@ sub _fetch_all_metadata {
             }
             elsif ($msg->{result}) {
                 my $track = $msg->{track};
+                my %upd;
                 if (my $meta = $msg->{meta}) {
-                    my %upd;
                     for my $key (qw( artist album year genre )) {
                         next if $track->{$key} && length $track->{$key};
                         $upd{$key} = $meta->{$key} if $meta->{$key};
                     }
-                    if (%upd) {
-                        $self->db->update_track_metadata($msg->{track_id}, %upd);
-                        $updated++;
-                    }
+                }
+                if ($msg->{duration_ms} && !$track->{duration_ms}) {
+                    $upd{duration_ms} = $msg->{duration_ms};
+                }
+                if (%upd) {
+                    $self->db->update_track_metadata($msg->{track_id}, %upd);
+                    $updated++;
                 }
                 $self->db->mark_metadata_fetched($msg->{track_id});
             }
@@ -1855,6 +1871,7 @@ sub _show_error {
 
 sub _quit {
     my ($self) = @_;
+    $self->_stop_metadata_fetch() if $self->_meta_watch_id;
     $self->player->quit() if $self->player;
     Gtk3->main_quit();
 }

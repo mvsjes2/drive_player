@@ -123,12 +123,19 @@ sub quit {
     my ($self) = @_;
     if ($self->_mpv_pid) {
         eval { $self->_send_command(['quit']) };
-        sleep 0.2;
-        kill 'TERM', $self->_mpv_pid if kill(0, $self->_mpv_pid);
-        waitpid($self->_mpv_pid, WNOHANG);
+        $self->_close_socket();
+        # Give mpv a moment to exit cleanly, then force-kill if still running.
+        my $deadline = time() + 2;
+        while (time() < $deadline) {
+            last unless kill(0, $self->_mpv_pid);
+            sleep 0.1;
+        }
+        kill 'KILL', $self->_mpv_pid if kill(0, $self->_mpv_pid);
+        waitpid($self->_mpv_pid, 0);
+        $self->_mpv_pid(undef);
+    } else {
+        $self->_close_socket();
     }
-    $self->_close_socket();
-    $self->_mpv_pid(undef);
     $self->_set_state('stop');
 }
 

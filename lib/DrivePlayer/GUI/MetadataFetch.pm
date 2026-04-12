@@ -1,0 +1,309 @@
+package DrivePlayer::GUI::MetadataFetch;
+
+# Moo role: background metadata-fetch machinery.
+
+use strict;
+use warnings;
+use utf8;
+use Moo::Role;
+
+use Glib            qw( TRUE FALSE );
+use Gtk3            '-init';
+use JSON::MaybeXS   qw( encode_json decode_json );
+use POSIX           qw( WNOHANG );
+
+use DrivePlayer::MetadataFetcher;
+
+has _meta_watch_id   => ( is => 'rw', default => sub { undef } );
+has _meta_pid        => ( is => 'rw', default => sub { undef } );
+has _meta_reader     => ( is => 'rw', default => sub { undef } );
+has _meta_buf        => ( is => 'rw', default => sub { q{} } );
+has _meta_fetch_item => ( is => 'rw' );
+
+sub _toggle_metadata_fetch {
+    my ($self) = @_;
+    if ($self->_meta_watch_id) {
+        $self->_stop_metadata_fetch();
+    } else {
+        $self->_fetch_all_metadata();
+    }
+    return;
+}
+
+sub _apply_meta_result {
+    my ($self, $msg) = @_;
+    my $track = $msg->{track};
+    my %upd;
+    if (my $meta = $msg->{meta}) {
+        for my $key (qw( artist album year genre )) {
+            next if $track->{$key} && length $track->{$key};
+            $upd{$key} = $meta->{$key} if $meta->{$key};
+        }
+    }
+    if ($msg->{duration_ms} && !$track->{duration_ms}) {
+        $upd{duration_ms} = $msg->{duration_ms};
+    }
+    if (%upd) {
+        $self->db->update_track_metadata($msg->{track_id}, %upd);
+        $self->db->mark_metadata_fetched($msg->{track_id});
+        return 1;
+    }
+    $self->db->mark_metadata_fetched($msg->{track_id});
+    return 0;
+}
+
+sub _fetch_all_metadata {
+    my ($self, $scan_folder_id) = @_;
+
+    my @tracks = $self->db->tracks_needing_metadata($scan_folder_id);
+    unless (@tracks) {
+        $self->_set_status('All tracks already fetched. Use Library → Reset Metadata Fetch to retry.');
+        return;
+    }
+
+    # Fetch the bearer token now, before forking, so the child can use it
+    # without needing to talk back to the OAuth layer.
+    my $token        = $self->_bearer_token() // q{};
+    my $acoustid_key = $self->config->acoustid_key();
+    my $use_fp       = $acoustid_key
+                    && DrivePlayer::MetadataFetcher::fpcalc_available()
+                    && $token;
+    my $total = scalar @tracks;
+
+    pipe(my $reader, my $writer) or do { $self->_show_error("pipe: $!"); return };
+
+    my $pid = fork();
+    unless (defined $pid) { $self->_show_error("fork: $!"); return }
+
+    if ($pid == 0) {
+        # ---- child: HTTP only, never touches GTK ----
+        close $reader;
+        $writer->autoflush(1);
+
+        my $fetcher = DrivePlayer::MetadataFetcher->new(
+            acoustid_key => $acoustid_key,
+            token_fn     => sub { $token },
+        );
+
+        for my $i (0 .. $#tracks) {
+            my $track = $tracks[$i];
+            my $n     = $i + 1;
+
+            print {$writer} encode_json({
+                status => 'fetching', n => $n, total => $total,
+                title  => $track->{title},
+            }) . "\n";
+
+            my $meta = eval { $fetcher->fetch(
+                title  => $track->{title},
+                artist => $track->{artist},
+                album  => $track->{album},
+            ) };
+
+            if (!$meta && $use_fp) {
+                print {$writer} encode_json({
+                    status => 'fingerprinting', n => $n, total => $total,
+                    title  => $track->{title},
+                }) . "\n";
+                $meta = eval { $fetcher->fetch_by_fingerprint(drive_id => $track->{drive_id}) };
+            }
+
+            # Probe duration if the track doesn't have one yet
+            my $duration_ms;
+            if (!$track->{duration_ms} && DrivePlayer::MetadataFetcher::ffprobe_available()) {
+                $duration_ms = eval {
+                    DrivePlayer::MetadataFetcher::probe_duration_ms(
+                        undef, $track->{drive_id}, $token,
+                    )
+                };
+            }
+
+            print {$writer} encode_json({
+                result      => 1,
+                track_id    => $track->{id},
+                track       => $track,
+                meta        => $meta,
+                duration_ms => $duration_ms,
+            }) . "\n";
+        }
+
+        print {$writer} encode_json({ done => 1 }) . "\n";
+        close $writer;
+        POSIX::_exit(0);
+    }
+
+    # ---- parent: reads results without blocking ----
+    close $writer;
+    $self->_meta_pid($pid);
+    $self->_meta_reader($reader);
+    $self->_meta_buf(q{});
+
+    my $updated = 0;
+
+    my $finish = sub {
+        if (my $wid = $self->_meta_watch_id) {
+            $self->_meta_watch_id(undef);
+            Glib::Source->remove($wid);
+        }
+        $self->_meta_pid(undef);
+        $self->_meta_fetch_item->set_label('Fetch All Metadata');
+        close $reader;
+        $self->_meta_reader(undef);
+        waitpid($pid, 0);
+    };
+
+    my $process_msg = sub {
+        my ($msg) = @_;
+        if ($msg->{status}) {
+            $self->_set_status(
+                "$msg->{status} $msg->{n}/$msg->{total} ($updated updated): $msg->{title}"
+            );
+        }
+        elsif ($msg->{result}) {
+            $updated += $self->_apply_meta_result($msg);
+        }
+        return;
+    };
+
+    my $watch_id = Glib::IO->add_watch(fileno($reader), ['in', 'hup'], sub {
+        my (undef, $cond) = @_;
+
+        my $chunk = q{};
+        my $bytes = sysread($reader, $chunk, 65536);
+
+        if (!defined $bytes || $bytes == 0) {
+            $finish->();
+            $self->_set_status("Metadata fetch done — $updated of $total updated.");
+            $self->_load_library();
+            $self->_auto_sync_to_sheet() if $updated;
+            return FALSE;
+        }
+
+        my $buf = $self->_meta_buf . $chunk;
+        while ($buf =~ s/\A([^\n]+)\n//) {
+            my $msg = eval { decode_json($1) } or next;
+            $process_msg->($msg);
+        }
+        $self->_meta_buf($buf);
+
+        return TRUE;
+    });
+
+    $self->_meta_watch_id($watch_id);
+    $self->_meta_fetch_item->set_label('Stop Metadata Fetch');
+    $self->_set_status("Fetching metadata for $total tracks in background…");
+    return;
+}
+
+sub _stop_metadata_fetch {
+    my ($self) = @_;
+    return unless $self->_meta_watch_id;
+    Glib::Source->remove($self->_meta_watch_id);
+    $self->_meta_watch_id(undef);
+    $self->_meta_fetch_item->set_label('Fetch All Metadata');
+    if (my $pid = $self->_meta_pid) {
+        kill 'TERM', $pid;
+        waitpid($pid, 0);
+        $self->_meta_pid(undef);
+    }
+    # Drain any result messages the child had already written before dying
+    if (my $reader = $self->_meta_reader) {
+        my $buf = $self->_meta_buf;
+        my $chunk = q{};
+        while (sysread($reader, $chunk, 65536)) {
+            $buf .= $chunk;
+        }
+        while ($buf =~ s/\A([^\n]+)\n//) {
+            my $msg = eval { decode_json($1) } or next;
+            next unless $msg->{result};
+            $self->_apply_meta_result($msg);
+        }
+        close $reader;
+        $self->_meta_reader(undef);
+        $self->_meta_buf(q{});
+    }
+    $self->_set_status('Metadata fetch stopped. Progress saved — will resume here next time.');
+    return;
+}
+
+sub _reset_metadata_fetch {
+    my ($self) = @_;
+    if ($self->_meta_watch_id) {
+        $self->_show_error('Cannot reset while a fetch is in progress.');
+        return;
+    }
+    $self->db->reset_metadata_fetched();
+    $self->_set_status('Metadata fetch progress reset — all tracks will be retried.');
+    return;
+}
+
+sub _fetch_track_metadata {
+    my ($self, $track) = @_;
+
+    my $yield = sub { Gtk3::main_iteration_do(FALSE) while Gtk3::events_pending() };
+
+    $self->_set_status('Looking up metadata…');
+    $yield->();
+
+    my $fetcher = DrivePlayer::MetadataFetcher->new(
+        yield        => $yield,
+        acoustid_key => $self->config->acoustid_key(),
+        token_fn     => sub { $self->_bearer_token() },
+    );
+    my $meta = $fetcher->fetch(
+        title  => $track->{title},
+        artist => $track->{artist},
+        album  => $track->{album},
+    );
+
+    unless ($meta) {
+        my $key      = $self->config->acoustid_key();
+        my $have_fp  = DrivePlayer::MetadataFetcher::fpcalc_available();
+
+        if (!$key) {
+            $self->_set_status('Text search: no match. Fingerprinting skipped: no AcoustID key set.');
+            return;
+        }
+        if (!$have_fp) {
+            $self->_set_status('Text search: no match. Fingerprinting skipped: fpcalc not installed.');
+            return;
+        }
+        unless ($self->_init_api()) {
+            $self->_set_status('Text search: no match. Fingerprinting skipped: Google API not initialised.');
+            return;
+        }
+
+        $self->_set_status('Text search: no match. Downloading audio for fingerprinting…');
+        $yield->();
+        my $err;
+        $meta = eval { $fetcher->fetch_by_fingerprint(drive_id => $track->{drive_id}) };
+        $err  = $@ if $@;
+
+        unless ($meta) {
+            my $reason = $err ? "error: $err"
+                               : $fetcher->last_fp_stage() // 'no match found';
+            $self->_set_status("Fingerprint lookup: $reason");
+            return;
+        }
+    }
+
+    my %merged = (%$track, %$meta);
+    $self->_edit_metadata_dialog(\%merged);
+    $self->_set_status(q{});
+    return;
+}
+
+1;
+
+__END__
+
+=head1 NAME
+
+DrivePlayer::GUI::MetadataFetch - Role for background metadata fetching
+
+=head1 DESCRIPTION
+
+A L<Moo::Role> consumed by L<DrivePlayer::GUI> that handles background
+metadata fetching via a forked child process.
+
+=cut

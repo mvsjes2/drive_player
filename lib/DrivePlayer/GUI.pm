@@ -636,6 +636,22 @@ sub _on_position {
     $self->progress->set_value($pos)    if defined $pos;
     $self->time_label->set_text(_sec_str($pos));
     $self->dur_label->set_text(_sec_str($dur));
+
+    # Persist duration when mpv reports it for a track that doesn't have one yet.
+    if ($dur && $dur > 0) {
+        my $idx   = $self->_playlist_idx;
+        my $track = $idx >= 0 ? $self->_playlist->[$idx] : undef;
+        if ($track && !$track->{duration_ms}) {
+            my $ms = int($dur * 1000);
+            $track->{duration_ms} = $ms;
+            $self->db->update_track_metadata($track->{id}, duration_ms => $ms);
+            # Update the visible duration cell in the list store
+            my $store = $self->track_store;
+            if (my $iter = $store->iter_nth_child(undef, $idx)) {
+                $store->set($iter, 6, _dur_str($ms));
+            }
+        }
+    }
 }
 
 sub _on_state_change {

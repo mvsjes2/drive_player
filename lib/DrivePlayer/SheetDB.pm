@@ -11,7 +11,7 @@ my %SHEET_PROPERTIES = (
         cols => [ qw( drive_id name ) ],
     },
     tracks => {
-        cols => [ qw( drive_id title artist album track_number year genre composer comment ) ],
+        cols => [ qw( drive_id title artist album track_number year duration_ms genre composer comment ) ],
     },
 );
 
@@ -272,7 +272,7 @@ C<drive_id> and C<name> for every top-level folder in the library.
 =item One tab per folder (named after the folder)
 
 Track metadata columns: C<drive_id title artist album track_number year
-genre composer comment>.  Structural fields (folder_id, duration_ms, etc.)
+duration_ms genre composer comment>.  Structural fields (folder_id, etc.)
 are re-derived from Drive scanning and are not stored in the sheet.
 
 =back

@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        perl-version:
+          - '5.42'
+          - '5.40'
+          - '5.38'
+
+    container:
+      image: perldocker/perl-tester:${{ matrix.perl-version }}
+
+    steps:
+      - uses: actions/checkout@main
+
+      - name: Install system dependencies
+        run: |
+          apt-get update -q
+          apt-get install -y --no-install-recommends \
+            libgtk-3-dev \
+            libglib2.0-dev \
+            libgirepository1.0-dev \
+            gir1.2-gtk-3.0 \
+            mpv
+
+      - run: perl -V
+      - run: cpanm --notest --installdeps --verbose .
+      - run: perl Makefile.PL
+      - run: make
+      - run: prove -wlvmb t

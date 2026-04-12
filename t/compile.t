@@ -3,7 +3,6 @@ use warnings;
 
 use FindBin;
 use lib "$FindBin::RealBin/../lib";
-use lib "$FindBin::RealBin/../../../p5-google-restapi/lib";
 use File::Find;
 use Test::More;
 

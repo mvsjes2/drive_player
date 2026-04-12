@@ -3,14 +3,13 @@
 # Targets:
 #   make install          - install system packages and all CPAN deps
 #   make install-system   - apt packages (GTK3 libs, mpv, build tools)
-#   make install-cpan     - CPAN modules (Google::RestApi deps + DrivePlayer deps)
+#   make install-cpan     - CPAN modules (via cpanfile)
 #   make test             - run the full test suite
 #
 # Assumes perlbrew/plenv is active if you want a user-local install.
 # Run with sudo only if installing into the system Perl.
 
-CPANM        := cpanm
-RESTAPI_DIR  := ../p5-google-restapi
+CPANM := cpanm
 
 SYSTEM_PKGS := \
     build-essential \
@@ -36,14 +35,8 @@ install-system:
 	sudo apt-get install -y $(SYSTEM_PKGS)
 
 ## Install all CPAN dependencies
-install-cpan: install-cpan-restapi install-cpan-driveplayer
-
-install-cpan-restapi:
-	@echo "==> Installing Google::RestApi dependencies"
-	$(CPANM) --installdeps $(RESTAPI_DIR)
-
-install-cpan-driveplayer:
-	@echo "==> Installing DrivePlayer dependencies"
+install-cpan:
+	@echo "==> Installing CPAN dependencies"
 	$(CPANM) --installdeps .
 
 ## Run the test suite

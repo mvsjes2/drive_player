@@ -4,7 +4,6 @@ use strict;
 use warnings;
 use FindBin;
 use lib "$FindBin::RealBin/lib";
-use lib "$FindBin::RealBin/../p5-google-restapi/lib";
 
 use DrivePlayer::GUI;
 
@@ -63,9 +62,9 @@ The config file is written to F<~/.config/drive_player/config.yaml>.
 
 =head2 4. Authorise access to Google Drive
 
-Run the OAuth token creator from the p5-google-restapi library:
+Run the OAuth token creator that ships with Google::RestApi:
 
-  perl ../p5-google-restapi/bin/google_restapi_oauth_token_creator
+  google_restapi_oauth_token_creator
 
 Follow the prompts.  The resulting token file is stored at
 F<~/.config/drive_player/token.dat> by default.

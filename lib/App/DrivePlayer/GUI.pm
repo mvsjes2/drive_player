@@ -201,6 +201,7 @@ sub _build_ui {
     $vbox->pack_start($self->statusbar, FALSE, FALSE, 0);
 
     $self->win->show_all();
+    $self->stop_btn->hide();   # hidden until playback starts
 }
 
 sub _build_menubar {
@@ -662,6 +663,11 @@ sub _on_state_change {
     my ($self, $state) = @_;
     my $icon = $state eq 'play' ? 'media-playback-pause' : 'media-playback-start';
     $self->play_btn->set_image(Gtk3::Image->new_from_icon_name($icon, 'button'));
+    if ($state eq 'stop') {
+        $self->stop_btn->hide();
+    } else {
+        $self->stop_btn->show();
+    }
 }
 
 sub _player_poll {

@@ -73,6 +73,11 @@ __PACKAGE__->add_columns(
         data_type   => 'text',
         is_nullable => 1,
     },
+    metadata_fetched => {
+        data_type     => 'integer',
+        is_nullable   => 0,
+        default_value => 0,
+    },
 );
 
 __PACKAGE__->set_primary_key('id');

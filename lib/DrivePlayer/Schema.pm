@@ -36,6 +36,9 @@ sub connect_and_deploy {
         next if $existing{$col};
         $dbh->do("ALTER TABLE tracks ADD COLUMN $col TEXT");
     }
+    unless ($existing{metadata_fetched}) {
+        $dbh->do('ALTER TABLE tracks ADD COLUMN metadata_fetched INTEGER NOT NULL DEFAULT 0');
+    }
 
     return $schema;
 }

@@ -5,6 +5,7 @@ package DrivePlayer::GUI;
 use DrivePlayer::Setup;
 use Glib            qw( TRUE FALSE );
 use Gtk3            '-init';
+use JSON::MaybeXS   qw( encode_json decode_json );
 use POSIX           qw( WNOHANG );
 
 use Google::RestApi;
@@ -60,6 +61,9 @@ has vol_scale          => ( is => 'rw' );
 has search_entry       => ( is => 'rw' );
 has statusbar          => ( is => 'rw' );
 has _status_ctx        => ( is => 'rw' );
+has _meta_watch_id     => ( is => 'rw', default => sub { undef } );
+has _meta_pid          => ( is => 'rw', default => sub { undef } );
+has _meta_fetch_item   => ( is => 'rw' );
 
 sub _bearer_token {
     my ($self) = @_;
@@ -85,6 +89,7 @@ sub run {
     $self->_auto_sync_from_sheet_on_new_db() if $db_is_new;
     $self->_prune_removed_folders();
     $self->_load_library();
+    $self->_fetch_all_metadata() if $self->db->tracks_needing_metadata();
 
     Glib::Timeout->add($POLL_INTERVAL_MS, sub {
         $self->_player_poll();
@@ -216,9 +221,11 @@ sub _build_menubar {
     my $lib_menu = Gtk3::Menu->new();
     $self->_add_menu_item($lib_menu, 'Sync',                   sub { $self->_sync_all() });
     $lib_menu->append(Gtk3::SeparatorMenuItem->new());
-    $self->_add_menu_item($lib_menu, 'Fetch All Metadata',     sub { $self->_fetch_all_metadata() });
+    my $fetch_item = $self->_add_menu_item($lib_menu, 'Fetch All Metadata', sub { $self->_toggle_metadata_fetch() });
+    $self->_meta_fetch_item($fetch_item);
+    $self->_add_menu_item($lib_menu, 'Reset Metadata Fetch',   sub { $self->_reset_metadata_fetch() });
     $lib_menu->append(Gtk3::SeparatorMenuItem->new());
-    $self->_add_menu_item($lib_menu, 'Clear Library',          sub { $self->_clear_library() });
+    $self->_add_menu_item($lib_menu, 'Clear Library',           sub { $self->_clear_library() });
     my $lib_item = Gtk3::MenuItem->new_with_label('Library');
     $lib_item->set_submenu($lib_menu);
     $mb->append($lib_item);
@@ -241,6 +248,7 @@ sub _add_menu_item {
     my $item = Gtk3::MenuItem->new_with_label($label);
     $item->signal_connect(activate => $cb);
     $menu->append($item);
+    return $item;
 }
 
 sub _build_toolbar {
@@ -931,13 +939,15 @@ sub _browse_folder_dialog {
         $dlg->set_response_sensitive('ok', ($id ne q{}) ? TRUE : FALSE);
     });
 
-    # Lazy-load subfolders when a row is expanded
+    # Lazy-load subfolders when a row is expanded.
+    # Do NOT remove the placeholder before the API call — removing the only
+    # child while the row is expanded causes GTK to auto-collapse it.
+    # The placeholder is removed inside _load_drive_children after real
+    # children have been appended.
     $tree->signal_connect('row-expanded' => sub {
         my (undef, $iter, undef) = @_;
         return if $store->get($iter, 2);
         $store->set($iter, 2, TRUE);
-        my $child = $store->iter_children($iter);
-        $store->remove($child) if $child;
         my $filter = $store->get($iter, 3);
         $self->_load_drive_children($store, $iter, $filter, $status);
     });
@@ -978,8 +988,18 @@ sub _load_drive_children {
         my $ph = $store->append($iter);
         $store->set($ph, 0, "Loading\x{2026}", 1, q{}, 2, FALSE, 3, q{});
     }
-    if (!@folders && defined $parent_iter) {
-        $status->set_text('No subfolders.');
+
+    # Remove the placeholder now that real children (or an empty notice) are
+    # in place.  Do this after appending so the row is never childless while
+    # expanded (which would cause GTK to auto-collapse it).
+    my $ph = $store->iter_children($parent_iter);
+    if ($ph && $store->get($ph, 1) eq q{}) {
+        if (@folders) {
+            $store->remove($ph);
+        } else {
+            # Can't remove the last child; relabel it instead.
+            $store->set($ph, 0, '(no subfolders)');
+        }
     }
 }
 
@@ -1513,103 +1533,161 @@ sub _fetch_track_metadata {
     $self->_set_status(q{});
 }
 
+sub _toggle_metadata_fetch {
+    my ($self) = @_;
+    if ($self->_meta_watch_id) {
+        $self->_stop_metadata_fetch();
+    } else {
+        $self->_fetch_all_metadata();
+    }
+}
+
 sub _fetch_all_metadata {
     my ($self) = @_;
 
-    my @tracks = $self->db->all_tracks();
+    my @tracks = $self->db->tracks_needing_metadata();
     unless (@tracks) {
-        $self->_show_error('Library is empty.');
+        $self->_set_status('All tracks already fetched. Use Library → Reset Metadata Fetch to retry.');
         return;
     }
 
-    my $dlg = Gtk3::Dialog->new_with_buttons(
-        'Fetching Metadata', $self->win,
-        [qw/ modal destroy-with-parent /],
-        'Stop', 'cancel',
-    );
-    $dlg->set_default_size(420, 130);
 
-    my $vbox = Gtk3::Box->new('vertical', 8);
-    $vbox->set_border_width(12);
-    $dlg->get_content_area()->pack_start($vbox, TRUE, TRUE, 0);
+    # Fetch the bearer token now, before forking, so the child can use it
+    # without needing to talk back to the OAuth layer.
+    my $token        = $self->_bearer_token() // q{};
+    my $acoustid_key = $self->config->acoustid_key();
+    my $use_fp       = $acoustid_key
+                    && DrivePlayer::MetadataFetcher::fpcalc_available()
+                    && $token;
+    my $total = scalar @tracks;
 
-    my $status_lbl = Gtk3::Label->new('Starting…');
-    $status_lbl->set_xalign(0.0);
-    $status_lbl->set_ellipsize('middle');
-    $vbox->pack_start($status_lbl, FALSE, FALSE, 0);
+    pipe(my $reader, my $writer) or do { $self->_show_error("pipe: $!"); return };
 
-    my $progress = Gtk3::ProgressBar->new();
-    $vbox->pack_start($progress, FALSE, FALSE, 0);
+    my $pid = fork();
+    unless (defined $pid) { $self->_show_error("fork: $!"); return }
 
-    my $count_lbl = Gtk3::Label->new('0 updated');
-    $count_lbl->set_xalign(0.0);
-    $vbox->pack_start($count_lbl, FALSE, FALSE, 0);
+    if ($pid == 0) {
+        # ---- child: HTTP only, never touches GTK ----
+        close $reader;
+        $writer->autoflush(1);
 
-    $dlg->show_all();
+        my $fetcher = DrivePlayer::MetadataFetcher->new(
+            acoustid_key => $acoustid_key,
+            token_fn     => sub { $token },
+        );
 
-    my $stopped  = FALSE;
-    my $updated  = 0;
-    my $total    = scalar @tracks;
+        for my $i (0 .. $#tracks) {
+            my $track = $tracks[$i];
+            my $n     = $i + 1;
 
-    my $yield = sub { Gtk3::main_iteration_do(FALSE) while Gtk3::events_pending() };
-    my $fetcher = DrivePlayer::MetadataFetcher->new(
-        yield        => $yield,
-        acoustid_key => $self->config->acoustid_key(),
-        token_fn     => sub { $self->_bearer_token() },
-    );
-    my $use_fingerprint = $self->config->acoustid_key()
-                       && DrivePlayer::MetadataFetcher::fpcalc_available()
-                       && $self->_init_api();
+            print {$writer} encode_json({
+                status => 'fetching', n => $n, total => $total,
+                title  => $track->{title},
+            }) . "\n";
 
-    $dlg->signal_connect(response => sub { $stopped = TRUE });
+            my $meta = eval { $fetcher->fetch(
+                title  => $track->{title},
+                artist => $track->{artist},
+                album  => $track->{album},
+            ) };
 
-    my $i = 0;
-    for my $track (@tracks) {
-        last if $stopped;
-        $i++;
-        $progress->set_fraction($i / $total);
-        $status_lbl->set_text("$i/$total: $track->{title}");
-        $yield->();
+            if (!$meta && $use_fp) {
+                print {$writer} encode_json({
+                    status => 'fingerprinting', n => $n, total => $total,
+                    title  => $track->{title},
+                }) . "\n";
+                $meta = eval { $fetcher->fetch_by_fingerprint(drive_id => $track->{drive_id}) };
+            }
 
-        my $meta = eval { $fetcher->fetch(
-            title  => $track->{title},
-            artist => $track->{artist},
-            album  => $track->{album},
-        ) };
-        $log->warn("Metadata fetch failed for '$track->{title}': $@") if $@ && $log;
-
-        unless ($meta) {
-            next unless $use_fingerprint;
-            $status_lbl->set_text("$i/$total [downloading]: $track->{title}");
-            $yield->();
-            $meta = eval { $fetcher->fetch_by_fingerprint(drive_id => $track->{drive_id}) };
-            $log->warn("Fingerprint fetch failed for '$track->{title}': $@") if $@ && $log;
-            next unless $meta;
+            print {$writer} encode_json({
+                result   => 1,
+                track_id => $track->{id},
+                track    => $track,
+                meta     => $meta,
+            }) . "\n";
         }
 
-        # Only overwrite fields that are currently blank
-        my %update;
-        for my $key (qw( artist album year genre )) {
-            next if $track->{$key} && length $track->{$key};
-            $update{$key} = $meta->{$key} if $meta->{$key};
-        }
-        if (%update) {
-            $self->db->update_track_metadata($track->{id}, %update);
-            $updated++;
-            $count_lbl->set_text("$updated updated");
-        }
-        Gtk3::main_iteration_do(FALSE) while Gtk3::events_pending();
+        print {$writer} encode_json({ done => 1 }) . "\n";
+        close $writer;
+        POSIX::_exit(0);
     }
 
-    $status_lbl->set_text(
-        $stopped ? "Stopped. $updated updated so far."
-                 : "Done. $updated of $total tracks updated."
-    );
-    $progress->set_fraction(1.0);
-    $fetcher->_yield_sleep(1.5);
-    $dlg->destroy();
-    $self->_load_library();
-    $self->_auto_sync_to_sheet() if $updated > 0;
+    # ---- parent: reads results without blocking ----
+    close $writer;
+    $self->_meta_pid($pid);
+
+    my $updated = 0;
+    my $buf     = q{};
+
+    my $finish = sub {
+        Glib::Source->remove($self->_meta_watch_id) if $self->_meta_watch_id;
+        $self->_meta_watch_id(undef);
+        $self->_meta_pid(undef);
+        $self->_meta_fetch_item->set_label('Fetch All Metadata');
+        close $reader;
+        waitpid($pid, 0);
+    };
+
+    my $watch_id = Glib::IO->add_watch(fileno($reader), ['in', 'hup'], sub {
+        my (undef, $cond) = @_;
+
+        my $chunk = q{};
+        my $bytes = sysread($reader, $chunk, 65536);
+
+        if (!defined $bytes || $bytes == 0) {
+            $finish->();
+            $self->_set_status("Metadata fetch done — $updated of $total updated.");
+            $self->_load_library();
+            $self->_auto_sync_to_sheet() if $updated;
+            return FALSE;
+        }
+
+        $buf .= $chunk;
+        while ($buf =~ s/\A([^\n]+)\n//) {
+            my $msg = eval { decode_json($1) } or next;
+
+            if ($msg->{status}) {
+                $self->_set_status(
+                    "$msg->{status} $msg->{n}/$msg->{total} ($updated updated): $msg->{title}"
+                );
+            }
+            elsif ($msg->{result}) {
+                my $track = $msg->{track};
+                if (my $meta = $msg->{meta}) {
+                    my %upd;
+                    for my $key (qw( artist album year genre )) {
+                        next if $track->{$key} && length $track->{$key};
+                        $upd{$key} = $meta->{$key} if $meta->{$key};
+                    }
+                    if (%upd) {
+                        $self->db->update_track_metadata($msg->{track_id}, %upd);
+                        $updated++;
+                    }
+                }
+                $self->db->mark_metadata_fetched($msg->{track_id});
+            }
+        }
+
+        return TRUE;
+    });
+
+    $self->_meta_watch_id($watch_id);
+    $self->_meta_fetch_item->set_label('Stop Metadata Fetch');
+    $self->_set_status("Fetching metadata for $total tracks in background…");
+}
+
+sub _stop_metadata_fetch {
+    my ($self) = @_;
+    return unless $self->_meta_watch_id;
+    Glib::Source->remove($self->_meta_watch_id);
+    $self->_meta_watch_id(undef);
+    $self->_meta_fetch_item->set_label('Fetch All Metadata');
+    if (my $pid = $self->_meta_pid) {
+        kill 'TERM', $pid;
+        waitpid($pid, 0);
+        $self->_meta_pid(undef);
+    }
+    $self->_set_status('Metadata fetch stopped. Progress saved — will resume here next time.');
 }
 
 sub _edit_metadata_dialog {
@@ -1668,6 +1746,16 @@ sub _edit_metadata_dialog {
         $self->_load_library();
     }
     $dlg->destroy();
+}
+
+sub _reset_metadata_fetch {
+    my ($self) = @_;
+    if ($self->_meta_watch_id) {
+        $self->_show_error('Cannot reset while a fetch is in progress.');
+        return;
+    }
+    $self->db->reset_metadata_fetched();
+    $self->_set_status('Metadata fetch progress reset — all tracks will be retried.');
 }
 
 sub _clear_library {

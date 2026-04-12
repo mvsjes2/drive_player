@@ -170,7 +170,7 @@ sub _write_worksheet {
 
     my $ws = $self->_ensure_worksheet($ss, $name, $n + 1);
     $ws->clear_values()->submit_requests();
-    $ws->row(1, $cols);
+    $ws->rows([1], [$cols]);
     $ws->rows([2 .. $n + 1], $rows) if $n;
 }
 

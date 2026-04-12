@@ -28,6 +28,29 @@ sub BUILD { $_[0]->schema }
 
 # ---- Helpers ----
 
+# Maximum character lengths for text fields written to the database.
+# Long values are silently truncated; integers are never truncated.
+my %MAX_LEN = (
+    title         => 500,
+    artist        => 255,
+    album         => 255,
+    genre         => 100,
+    composer      => 255,
+    comment       => 500,
+    mime_type     => 100,
+    modified_time =>  50,
+    name          => 500,
+    path          => 500,
+    folder_path   => 500,
+);
+
+sub _trunc {
+    my ($val, $field) = @_;
+    return $val unless defined $val && exists $MAX_LEN{$field};
+    my $max = $MAX_LEN{$field};
+    return length($val) > $max ? substr($val, 0, $max) : $val;
+}
+
 # Convert a DBIC Row object to a plain hashref.
 sub _row_to_hash { my $row = shift; return $row ? { $row->get_columns() } : undef }
 
@@ -39,7 +62,8 @@ sub _rs { $_[0]->schema->resultset($_[1]) }
 sub upsert_scan_folder {
     my ($self, $drive_id, $name) = @_;
     my $row = $self->_rs('ScanFolder')->update_or_create(
-        { drive_id => $drive_id, name => $name },
+        { drive_id => $drive_id,
+          name     => _trunc($name, 'name') },
         { key => 'unique_drive_id' },
     );
     return _row_to_hash($row);
@@ -72,9 +96,9 @@ sub upsert_folder {
     my $row = $self->_rs('Folder')->update_or_create(
         {
             drive_id        => $f{drive_id},
-            name            => $f{name},
+            name            => _trunc($f{name},            'name'),
             parent_drive_id => $f{parent_drive_id},
-            path            => $f{path},
+            path            => _trunc($f{path},            'path'),
             scan_folder_id  => $f{scan_folder_id},
         },
         { key => 'unique_drive_id' },
@@ -113,32 +137,32 @@ sub upsert_track {
         # nulls from the scan's filename-derived values.  This ensures that
         # metadata loaded from the sheet (or set via AcoustID) is never
         # silently overwritten by a re-scan.
-        my %update = map { $_ => $t{$_} } @STRUCTURAL_FIELDS;
+        my %update = map { $_ => _trunc($t{$_}, $_) } @STRUCTURAL_FIELDS;
         for my $f (@METADATA_FIELDS) {
             my $cur = $existing->get_column($f);
             # Treat the drive_id placeholder as absent for the title field.
             my $absent = !defined $cur || $cur eq ''
                       || ($f eq 'title' && $cur eq $existing->drive_id);
-            $update{$f} = $t{$f} if $absent;
+            $update{$f} = _trunc($t{$f}, $f) if $absent;
         }
         $existing->update(\%update);
     } else {
         $self->_rs('Track')->create({
             drive_id      => $t{drive_id},
-            title         => $t{title},
-            artist        => $t{artist},
-            album         => $t{album},
+            title         => _trunc($t{title},         'title'),
+            artist        => _trunc($t{artist},        'artist'),
+            album         => _trunc($t{album},         'album'),
             track_number  => $t{track_number},
             year          => $t{year},
             duration_ms   => $t{duration_ms},
             size          => $t{size},
-            mime_type     => $t{mime_type},
-            modified_time => $t{modified_time},
+            mime_type     => _trunc($t{mime_type},     'mime_type'),
+            modified_time => _trunc($t{modified_time}, 'modified_time'),
             folder_id     => $t{folder_id},
-            folder_path   => $t{folder_path},
-            genre         => $t{genre},
-            composer      => $t{composer},
-            comment       => $t{comment},
+            folder_path   => _trunc($t{folder_path},   'folder_path'),
+            genre         => _trunc($t{genre},         'genre'),
+            composer      => _trunc($t{composer},      'composer'),
+            comment       => _trunc($t{comment},       'comment'),
         });
     }
 }
@@ -162,16 +186,16 @@ sub upsert_track_from_metadata {
     $self->_rs('Track')->update_or_create(
         {
             drive_id     => $fields{drive_id},
-            title        => $fields{title} || $fields{drive_id},
-            mime_type    => $fields{mime_type} || 'audio/',
+            title        => _trunc($fields{title} || $fields{drive_id}, 'title'),
+            mime_type    => _trunc($fields{mime_type} || 'audio/', 'mime_type'),
             folder_id    => $fields{folder_id}    // undef,
-            artist       => $fields{artist}       // undef,
-            album        => $fields{album}        // undef,
+            artist       => _trunc($fields{artist},    'artist'),
+            album        => _trunc($fields{album},     'album'),
             track_number => $fields{track_number} // undef,
             year         => $fields{year}         // undef,
-            genre        => $fields{genre}        // undef,
-            composer     => $fields{composer}     // undef,
-            comment      => $fields{comment}      // undef,
+            genre        => _trunc($fields{genre},     'genre'),
+            composer     => _trunc($fields{composer},  'composer'),
+            comment      => _trunc($fields{comment},   'comment'),
         },
         { key => 'unique_drive_id' },
     );
@@ -314,6 +338,26 @@ sub top_folders {
 sub track_count {
     my ($self) = @_;
     return $self->_rs('Track')->count;
+}
+
+sub tracks_needing_metadata {
+    my ($self) = @_;
+    return map { _row_to_hash($_) }
+        $self->_rs('Track')->search(
+            { metadata_fetched => 0 },
+            { order_by => \@TRACK_ORDER },
+        )->all;
+}
+
+sub mark_metadata_fetched {
+    my ($self, $id) = @_;
+    my $row = $self->_rs('Track')->find($id) or return;
+    $row->update({ metadata_fetched => 1 });
+}
+
+sub reset_metadata_fetched {
+    my ($self) = @_;
+    $self->_rs('Track')->update_all({ metadata_fetched => 0 });
 }
 
 sub clear_scan_folder_tracks {

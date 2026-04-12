@@ -296,7 +296,8 @@ sub _build_sidebar {
     my $view = Gtk3::TreeView->new($store);
     $view->set_headers_visible(FALSE);
     $view->get_selection()->set_mode('single');
-    $view->signal_connect('cursor-changed' => sub { $self->_sidebar_activated($view) });
+    $view->signal_connect('cursor-changed'   => sub { $self->_sidebar_activated($view) });
+    $view->signal_connect('button-press-event' => sub { $self->_sidebar_button_press($view, $_[1]) });
     $self->sidebar_view($view);
 
     $view->set_size_request(100, -1);
@@ -693,6 +694,31 @@ sub _sidebar_activated {
     }
 
     $self->_set_status(scalar(@{ $self->_playlist }) . ' tracks');
+}
+
+sub _sidebar_button_press {
+    my ($self, $view, $event) = @_;
+    return FALSE unless $event->button == 3;
+
+    my ($path) = $view->get_path_at_pos($event->x, $event->y);
+    return FALSE unless $path;
+
+    my $store = $self->sidebar_store;
+    my $iter  = $store->get_iter($path);
+    my $type  = $store->get($iter, 1);
+    return FALSE unless $type eq 'folder';
+
+    my $drive_id = $store->get($iter, 2);
+    my $sf       = $self->db->get_scan_folder_by_drive_id($drive_id) or return FALSE;
+
+    my $menu = Gtk3::Menu->new();
+    $self->_add_menu_item($menu, 'Fetch Metadata for This Folder', sub {
+        $self->_stop_metadata_fetch() if $self->_meta_watch_id;
+        $self->_fetch_all_metadata($sf->{id});
+    });
+    $menu->show_all();
+    $menu->popup_at_pointer($event);
+    return TRUE;
 }
 
 # ---- Search ----
@@ -1559,9 +1585,9 @@ sub _toggle_metadata_fetch {
 }
 
 sub _fetch_all_metadata {
-    my ($self) = @_;
+    my ($self, $scan_folder_id) = @_;
 
-    my @tracks = $self->db->tracks_needing_metadata();
+    my @tracks = $self->db->tracks_needing_metadata($scan_folder_id);
     unless (@tracks) {
         $self->_set_status('All tracks already fetched. Use Library → Reset Metadata Fetch to retry.');
         return;
@@ -1806,7 +1832,9 @@ sub _update_now_playing {
 sub _highlight_row {
     my ($self, $idx) = @_;
     my $path = Gtk3::TreePath->new_from_indices($idx);
-    $self->track_view->get_selection()->select_path($path);
+    my $sel  = $self->track_view->get_selection();
+    $sel->unselect_all();
+    $sel->select_path($path);
     $self->track_view->scroll_to_cell($path, undef, TRUE, 0.5, 0.0);
 }
 

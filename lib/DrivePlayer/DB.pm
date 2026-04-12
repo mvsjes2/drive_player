@@ -171,7 +171,7 @@ sub update_track_metadata {
     my ($self, $id, %fields) = @_;
     my $row = $self->_rs('Track')->find($id) or return;
     my %allowed = map { $_ => 1 }
-        qw( title artist album track_number year genre composer comment );
+        qw( title artist album track_number year duration_ms genre composer comment );
     my %update = map { $_ => $fields{$_} }
         grep { $allowed{$_} } keys %fields;
     $row->update(\%update) if %update;
@@ -341,12 +341,15 @@ sub track_count {
 }
 
 sub tracks_needing_metadata {
-    my ($self) = @_;
+    my ($self, $scan_folder_id) = @_;
+    my %cond = ( metadata_fetched => 0 );
+    my %attr = ( order_by => \@TRACK_ORDER );
+    if (defined $scan_folder_id) {
+        $cond{'folder.scan_folder_id'} = $scan_folder_id;
+        $attr{join} = 'folder';
+    }
     return map { _row_to_hash($_) }
-        $self->_rs('Track')->search(
-            { metadata_fetched => 0 },
-            { order_by => \@TRACK_ORDER },
-        )->all;
+        $self->_rs('Track')->search(\%cond, \%attr)->all;
 }
 
 sub mark_metadata_fetched {

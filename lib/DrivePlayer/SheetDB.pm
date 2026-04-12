@@ -165,10 +165,13 @@ sub _open {
 # Write a header row then all data rows to a named worksheet (full replace).
 sub _write_worksheet {
     my ($self, $ss, $name, $properties, $rows) = @_;
-    my $ws = $self->_ensure_worksheet($ss, $name);
-    $ws->range("A1:Z500")->clear();
-    $ws->row(1, $SHEET_PROPERTIES{$properties}->{cols});
-    $ws->rows([2 .. scalar @$rows + 1], $rows) if @$rows;
+    my $n    = scalar @$rows;
+    my $cols = $SHEET_PROPERTIES{$properties}{cols};
+
+    my $ws = $self->_ensure_worksheet($ss, $name, $n + 1);
+    $ws->clear_values()->submit_requests();
+    $ws->row(1, $cols);
+    $ws->rows([2 .. $n + 1], $rows) if $n;
 }
 
 # Read a worksheet and return arrayref of hashrefs keyed by header row.
@@ -194,12 +197,30 @@ sub _read_worksheet {
     return \@result;
 }
 
-# Open a worksheet by name, creating it if absent.
+# Open a worksheet by name, creating it with enough rows if absent, or
+# expand it if it already exists but the grid is too small for the data.
 sub _ensure_worksheet {
-    my ($self, $ss, $name) = @_;
-    # add_worksheet fails if the sheet already exists — that's fine, ignore it.
-    eval { $ss->add_worksheet(name => $name)->submit_requests() };
-    return $ss->open_worksheet(name => $name);
+    my ($self, $ss, $name, $needed_rows) = @_;
+    # Default Google Sheets grid is 1000 rows; honour that for small data.
+    $needed_rows = 1000 if !$needed_rows || $needed_rows < 1000;
+
+    # Try to create; silently ignore the error if it already exists.
+    eval { $ss->add_worksheet(
+        name            => $name,
+        grid_properties => { rows => $needed_rows },
+    )->submit_requests() };
+
+    my $ws = $ss->open_worksheet(name => $name);
+
+    # Expand an existing sheet that may have been created with fewer rows.
+    if ($needed_rows > 1000) {
+        $ws->update_worksheet_properties(
+            properties => { gridProperties => { rowCount => $needed_rows } },
+            fields     => 'gridProperties.rowCount',
+        )->submit_requests();
+    }
+
+    return $ws;
 }
 
 # Sanitise a folder name for use as a worksheet tab name.

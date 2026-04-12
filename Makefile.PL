@@ -20,6 +20,7 @@ WriteMakefile(
         'Log::Log4perl'    => 0,
         'Moo'              => 0,
         'Readonly'         => 0,
+        'SQL::Translator'  => '0.11018',
         'ToolSet'          => 0,
         'Type::Tiny'       => 0,
         'YAML::XS'         => 0,
@@ -27,7 +28,6 @@ WriteMakefile(
     TEST_REQUIRES => {
         'Mock::MonkeyPatch'  => 0,
         'Module::Load'       => 0,
-        'SQL::Translator'    => '0.11018',
         'Test::Class'        => 0,
         'Test::Class::Load'  => 0,
         'Test::Compile'      => 0,

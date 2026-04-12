@@ -12,10 +12,10 @@ requires 'Moo';
 requires 'Readonly';
 requires 'ToolSet';
 requires 'Type::Tiny';
+requires 'SQL::Translator', '0.11018';
 requires 'YAML::XS';
 
 on test => sub {
-    requires 'SQL::Translator', '0.11018';
     requires 'Mock::MonkeyPatch';
     requires 'Module::Load';
     requires 'Test::Class';

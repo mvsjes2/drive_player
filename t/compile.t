@@ -6,6 +6,8 @@ use lib "$FindBin::RealBin/../lib";
 use File::Find;
 use Test::More;
 
+my $have_display = $ENV{DISPLAY} || $ENV{WAYLAND_DISPLAY};
+
 my @modules;
 my $lib = "$FindBin::RealBin/../lib";
 find(
@@ -24,5 +26,10 @@ my @sorted = sort @modules;
 plan tests => scalar @sorted;
 
 for my $module (@sorted) {
-    use_ok($module);
+    my $needs_display = $module =~ /::GUI/;
+    if ($needs_display && !$have_display) {
+        pass("$module (skipped — no display)");
+    } else {
+        use_ok($module);
+    }
 }

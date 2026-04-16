@@ -29,6 +29,11 @@ sub _build_data {
     my $data = $self->_defaults();
     if (-f $self->config_file) {
         my $file = LoadFile($self->config_file);
+        # Migrate legacy root-level auth key into google_restapi.auth
+        if ($file->{auth} && !($file->{google_restapi} && $file->{google_restapi}{auth})) {
+            $file->{google_restapi} //= {};
+            $file->{google_restapi}{auth} = delete $file->{auth};
+        }
         _merge($data, $file);
     }
     _expand_paths($data, dirname($self->config_file));
@@ -49,12 +54,14 @@ sub _merge {
 
 sub _defaults {
     return {
-        auth => {
-            class         => 'OAuth2Client',
-            client_id     => '',
-            client_secret => '',
-            token_file    => "$DEFAULT_CONFIG_DIR/token.dat",
-            scope         => ['https://www.googleapis.com/auth/drive.readonly'],
+        google_restapi => {
+            auth => {
+                class         => 'OAuth2Client',
+                client_id     => '',
+                client_secret => '',
+                token_file    => "$DEFAULT_CONFIG_DIR/token.dat",
+                scope         => ['https://www.googleapis.com/auth/drive.readonly'],
+            },
         },
         music_folders => [],
         database      => { path => $DEFAULT_DB_PATH },
@@ -70,10 +77,14 @@ sub _expand_paths {
     for my $key (qw( log_file )) {
         $data->{$key} = _abs_path($data->{$key}, $config_dir) if defined $data->{$key};
     }
-    $data->{database}{path}   = _abs_path($data->{database}{path},   $config_dir)
+    $data->{database}{path} = _abs_path($data->{database}{path}, $config_dir)
         if defined $data->{database}{path};
-    $data->{auth}{token_file} = _abs_path($data->{auth}{token_file}, $config_dir)
-        if defined $data->{auth}{token_file};
+
+    # Support auth under google_restapi.auth (preferred) or legacy root auth key
+    my $auth = $data->{google_restapi}{auth} // $data->{auth};
+    if ($auth && defined $auth->{token_file}) {
+        $auth->{token_file} = _abs_path($auth->{token_file}, $config_dir);
+    }
 }
 
 sub _abs_path {
@@ -100,7 +111,14 @@ sub ensure_dirs {
 }
 
 # Auth config hashref suitable for Google::RestApi->new(auth => ...)
-sub auth_config    { $_[0]->_data->{auth} }
+# Prefers google_restapi.auth; falls back to legacy root-level auth key.
+sub auth_config {
+    my ($self) = @_;
+    return $self->_data->{google_restapi}{auth} // $self->_data->{auth} // {};
+}
+
+# Full google_restapi config block for Google::RestApi->new(google_restapi => ...)
+sub google_restapi_config { $_[0]->_data->{google_restapi} }
 
 # Music folders: arrayref of { id => '...', name => '...' }
 sub music_folders {
@@ -125,7 +143,7 @@ sub remove_music_folder {
 sub db_path      { $_[0]->_data->{database}{path} }
 sub log_level    { $_[0]->_data->{log_level} // 'WARN' }
 sub log_file     { $_[0]->_data->{log_file} }
-sub token_file   { $_[0]->_data->{auth}{token_file} }
+sub token_file   { $_[0]->auth_config->{token_file} }
 sub acoustid_key { $_[0]->_data->{acoustid_key} // '' }
 sub sheet_id     { $_[0]->_data->{sheet_id}     // '' }
 

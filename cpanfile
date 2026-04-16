@@ -1,7 +1,9 @@
 # DrivePlayer CPAN dependencies
 # Install with: cpanm --installdeps .
 
-requires 'Google::RestApi';
+requires 'Google::RestApi', '>= 2.2.2';
+requires 'URI';
+requires 'YAML';
 requires 'DBD::SQLite';
 requires 'DBIx::Class';
 requires 'Glib';

@@ -165,12 +165,12 @@ sub _open {
 # Write a header row then all data rows to a named worksheet (full replace).
 sub _write_worksheet {
     my ($self, $ss, $name, $properties, $rows) = @_;
-    my $n    = scalar @$rows;
     my $cols = $SHEET_PROPERTIES{$properties}{cols};
 
+    my $n  = scalar @$rows;
     my $ws = $self->_ensure_worksheet($ss, $name, $n + 1);
     $ws->clear_values()->submit_requests();
-    $ws->rows([1], [$cols]);
+    $ws->row(1, $cols);
     $ws->rows([2 .. $n + 1], $rows) if $n;
 }
 
@@ -183,8 +183,7 @@ sub _read_worksheet {
     return [] unless $ws;
 
     $ws->enable_header_row();
-    my $col = 1;
-    my $cols = $ws->tie_cols(map { $_ => { col => $col++ }; } $ws->header_row->@*);
+    my $cols = $ws->tie_cols;
     tied(%$cols)->values();      # prefetch the columns.
 
     my @result;

@@ -57,6 +57,7 @@ sub _apply_meta_result {
         $log->info("Metadata [$title]: $detail") if $log;
         $self->db->update_track_metadata($msg->{track_id}, %upd);
         $self->db->mark_metadata_fetched($msg->{track_id});
+        $self->_refresh_track_row($msg->{track_id});
         return 1;
     }
     $log->info("Metadata [$title]: source=$msg->{source} — no new fields") if $log;
@@ -276,6 +277,17 @@ sub _reset_metadata_fetch {
     }
     $self->db->reset_metadata_fetched();
     $self->_set_status('Metadata fetch progress reset — all tracks will be retried.');
+    return;
+}
+
+sub _retry_incomplete_metadata {
+    my ($self) = @_;
+    if ($self->_meta_watch_id) {
+        $self->_show_error('Cannot reset while a fetch is in progress.');
+        return;
+    }
+    $self->db->reset_metadata_fetched_incomplete();
+    $self->_fetch_all_metadata();
     return;
 }
 

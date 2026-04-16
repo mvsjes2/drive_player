@@ -36,8 +36,10 @@ has drive    => ( is => 'rw', default => sub { undef } );
 has player   => ( is => 'rw', default => sub { undef } );
 has scanner  => ( is => 'rw', default => sub { undef } );
 
-has _playlist     => ( is => 'rw', isa => ArrayRef, default => sub { [] } );
-has _playlist_idx => ( is => 'rw', isa => Int,      default => -1 );
+has _playlist        => ( is => 'rw', isa => ArrayRef, default => sub { [] } );
+has _track_by_id     => ( is => 'rw', default => sub { {} } );
+has _playing_row_ref => ( is => 'rw', default => sub { undef } );
+has _playing_track_id => ( is => 'rw', default => sub { undef } );
 has _progress_dragging => ( is => 'rw', isa => Bool, default => 0 );
 
 # Widget accessors — set during _build_ui
@@ -45,6 +47,7 @@ has win                => ( is => 'rw' );
 has sidebar_store      => ( is => 'rw' );
 has sidebar_view       => ( is => 'rw' );
 has track_store        => ( is => 'rw' );
+has _track_iter_map    => ( is => 'rw', default => sub { {} } );
 has track_view         => ( is => 'rw' );
 has track_count_label  => ( is => 'rw' );
 has now_playing_label  => ( is => 'rw' );
@@ -117,10 +120,14 @@ sub _init_logging {
         log4perl.appender.Screen.layout.ConversionPattern=%d [%p] %m%n
         log4perl.appender.File=Log::Log4perl::Appender::File
         log4perl.appender.File.filename=$file
+        log4perl.appender.File.utf8=1
         log4perl.appender.File.layout=Log::Log4perl::Layout::PatternLayout
         log4perl.appender.File.layout.ConversionPattern=%d [%p] %m%n
     ";
-    Log::Log4perl->init(\$log4perl_conf) if eval { require Log::Log4perl; 1 };
+    if (eval { require Log::Log4perl; 1 }) {
+        Log::Log4perl->init(\$log4perl_conf);
+        binmode STDERR, ':encoding(UTF-8)';
+    }
 }
 
 sub _init_api {
@@ -223,10 +230,12 @@ sub _build_menubar {
     # Library menu
     my $lib_menu = Gtk3::Menu->new();
     $self->_add_menu_item($lib_menu, 'Sync',                   sub { $self->_sync_all() });
+    $self->_add_menu_item($lib_menu, 'Refresh',               sub { $self->_load_library() });
     $lib_menu->append(Gtk3::SeparatorMenuItem->new());
     my $fetch_item = $self->_add_menu_item($lib_menu, 'Fetch All Metadata', sub { $self->_toggle_metadata_fetch() });
     $self->_meta_fetch_item($fetch_item);
-    $self->_add_menu_item($lib_menu, 'Reset Metadata Fetch',   sub { $self->_reset_metadata_fetch() });
+    $self->_add_menu_item($lib_menu, 'Retry Incomplete Metadata', sub { $self->_retry_incomplete_metadata() });
+    $self->_add_menu_item($lib_menu, 'Reset Metadata Fetch',      sub { $self->_reset_metadata_fetch() });
     $lib_menu->append(Gtk3::SeparatorMenuItem->new());
     $self->_add_menu_item($lib_menu, 'Clear Library',           sub { $self->_clear_library() });
     my $lib_item = Gtk3::MenuItem->new_with_label('Library');
@@ -314,7 +323,51 @@ sub _build_sidebar {
     $view->set_fixed_height_mode(TRUE);
 
     $sw->add($view);
-    return $sw;
+
+    my $hbox = Gtk3::Box->new('horizontal', 0);
+    $hbox->pack_start($self->_build_alpha_strip(), FALSE, FALSE, 0);
+    $hbox->pack_start($sw, TRUE, TRUE, 0);
+    return $hbox;
+}
+
+sub _build_alpha_strip {
+    my ($self) = @_;
+    my $vbox = Gtk3::Box->new('vertical', 0);
+
+    for my $letter ('#', 'A' .. 'Z') {
+        my $btn = Gtk3::Button->new_with_label($letter);
+        $btn->set_relief('none');
+        $btn->set_can_focus(FALSE);
+        $btn->set_size_request(20, 1);
+        $btn->signal_connect(clicked => sub { $self->_sidebar_jump_to_letter($letter) });
+        $vbox->pack_start($btn, TRUE, TRUE, 0);
+    }
+
+    return $vbox;
+}
+
+sub _sidebar_jump_to_letter {
+    my ($self, $letter) = @_;
+    my $store = $self->sidebar_store;
+    my $view  = $self->sidebar_view;
+
+    my $cat_iter = $store->get_iter_first() or return;
+    do {
+        my $n = $store->iter_n_children($cat_iter);
+        for my $i (0 .. $n - 1) {
+            my $child = $store->iter_nth_child($cat_iter, $i) or next;
+            my $label = $store->get($child, 0) // '';
+            my $first = uc(substr($label, 0, 1));
+            my $matches = $letter eq '#' ? ($first lt 'A' || $first gt 'Z')
+                                         : $first eq $letter;
+            next unless $matches;
+            my $path = $store->get_path($child);
+            $view->expand_to_path($path);
+            $view->set_cursor($path, undef, FALSE);
+            $view->scroll_to_cell($path, undef, TRUE, 0.0, 0.0);
+            return;
+        }
+    } while ($store->iter_next($cat_iter));
 }
 
 sub _build_tracklist {
@@ -354,21 +407,21 @@ sub _build_tracklist {
     $self->track_view($view);
 
     my @cols = (
-        ['#',        1, 40,  FALSE],
-        ['Title',    2, 250, TRUE],
-        ['Artist',   3, 180, TRUE],
-        ['Album',    4, 180, TRUE],
-        ['Genre',    5, 120, FALSE],
-        ['Duration', 6, 70,  FALSE],
+        ['#',        1,  40],
+        ['Title',    2, 220],
+        ['Artist',   3, 160],
+        ['Album',    4, 160],
+        ['Genre',    5, 100],
+        ['Duration', 6,  65],
     );
     for my $col_def (@cols) {
-        my ($title, $idx, $width, $expand) = @$col_def;
+        my ($title, $idx, $width) = @$col_def;
         my $r = Gtk3::CellRendererText->new();
         my $c = Gtk3::TreeViewColumn->new_with_attributes($title, $r, text => $idx);
         $c->set_resizable(TRUE);
         $c->set_sort_column_id($idx);
-        $c->set_min_width($width);
-        $c->set_expand($expand);
+        $c->set_sizing('fixed');
+        $c->set_fixed_width($width);
         $view->append_column($c);
     }
 
@@ -540,8 +593,11 @@ sub _populate_tracklist {
     my ($self, @tracks) = @_;
     my $store = $self->track_store;
     $store->clear();
+    $self->_track_iter_map({});
+    $self->_track_by_id({});
     $self->_playlist(\@tracks);
-    $self->_playlist_idx(-1);
+    $self->_playing_row_ref(undef);
+    $self->_playing_track_id(undef);
 
     for my $t (@tracks) {
         my $iter = $store->append();
@@ -555,28 +611,53 @@ sub _populate_tracklist {
             6, _dur_str($t->{duration_ms}),
             7, $t->{drive_id}     // '',
         );
+        if ($t->{id}) {
+            $self->_track_iter_map->{$t->{id}} = $iter;
+            $self->_track_by_id->{$t->{id}}    = $t;
+        }
     }
 
     my $n = scalar @tracks;
     $self->track_count_label->set_text($n == 1 ? '1 track' : "$n tracks");
 }
 
+sub _refresh_track_row {
+    my ($self, $track_id) = @_;
+    my $iter = $self->_track_iter_map->{$track_id} or return;
+    my $t    = $self->db->get_track($track_id)      or return;
+    $self->track_store->set($iter,
+        1, _track_num_str($t->{track_number}),
+        3, $t->{artist}   // '',
+        4, $t->{album}    // '',
+        5, $t->{genre}    // '',
+        6, _dur_str($t->{duration_ms}),
+    );
+}
+
 # ---- Playback ----
 
 sub _track_activated {
     my ($self, $view, $path, $col) = @_;
-    my ($idx) = $path->get_indices();
-    $self->_play_index($idx);
+    $self->_play_at_path($path);
 }
 
-sub _play_index {
-    my ($self, $idx) = @_;
-    my $tracks = $self->_playlist;
-    return unless $idx >= 0 && $idx < scalar @$tracks;
+sub _track_at_path {
+    my ($self, $path) = @_;
+    my $iter = $self->track_store->get_iter($path) or return;
+    my $id   = $self->track_store->get($iter, 0);
+    return $self->_track_by_id->{$id};
+}
 
-    $self->_playlist_idx($idx);
-    my $track = $tracks->[$idx];
+sub _current_path {
+    my ($self) = @_;
+    my $ref = $self->_playing_row_ref or return;
+    return unless $ref->valid();
+    return $ref->get_path();
+}
 
+sub _play_at_path {
+    my ($self, $path) = @_;
+    my $track = $self->_track_at_path($path) or return;
     return unless $self->_init_api();
 
     eval { $self->player->play($track) };
@@ -585,8 +666,10 @@ sub _play_index {
         return;
     }
 
+    $self->_playing_track_id($track->{id});
+    $self->_playing_row_ref(Gtk3::TreeRowReference->new($self->track_store, $path));
     $self->_update_now_playing($track);
-    $self->_highlight_row($idx);
+    $self->_highlight_path($path);
 }
 
 sub _toggle_play {
@@ -594,12 +677,8 @@ sub _toggle_play {
     if (!$self->player || $self->player->state eq 'stop') {
         my $sel = $self->track_view->get_selection();
         my (undef, @paths) = $sel->get_selected_rows();
-        if (@paths) {
-            my ($ridx) = $paths[0]->get_indices();
-            $self->_play_index($ridx);
-        } else {
-            $self->_play_index(0);
-        }
+        my $path = @paths ? $paths[0] : Gtk3::TreePath->new_from_indices(0);
+        $self->_play_at_path($path);
     } else {
         return unless $self->_init_api();
         $self->player->pause_resume();
@@ -617,14 +696,22 @@ sub _stop {
 
 sub _next_track {
     my ($self) = @_;
-    my $idx = $self->_playlist_idx + 1;
-    $self->_play_index($idx) if $idx < scalar @{ $self->_playlist };
+    my $path = $self->_current_path();
+    if ($path) {
+        my $iter = $self->track_store->get_iter($path);
+        return unless $iter && $self->track_store->iter_next($iter);
+        $self->_play_at_path($self->track_store->get_path($iter));
+    } else {
+        $self->_play_at_path(Gtk3::TreePath->new_from_indices(0))
+            if @{ $self->_playlist };
+    }
 }
 
 sub _prev_track {
     my ($self) = @_;
-    my $idx = $self->_playlist_idx - 1;
-    $self->_play_index($idx) if $idx >= 0;
+    my $path = $self->_current_path() or return;
+    return unless $path->prev();
+    $self->_play_at_path($path);
 }
 
 # ---- Player callbacks ----
@@ -644,17 +731,13 @@ sub _on_position {
 
     # Persist duration when mpv reports it for a track that doesn't have one yet.
     if ($dur && $dur > 0) {
-        my $idx   = $self->_playlist_idx;
-        my $track = $idx >= 0 ? $self->_playlist->[$idx] : undef;
+        my $id    = $self->_playing_track_id;
+        my $track = $id ? $self->_track_by_id->{$id} : undef;
         if ($track && !$track->{duration_ms}) {
             my $ms = int($dur * 1000);
-            $track->{duration_ms} = $ms;
+            $track->{duration_ms} = $ms;   # mutate to prevent firing again
             $self->db->update_track_metadata($track->{id}, duration_ms => $ms);
-            # Update the visible duration cell in the list store
-            my $store = $self->track_store;
-            if (my $iter = $store->iter_nth_child(undef, $idx)) {
-                $store->set($iter, 6, _dur_str($ms));
-            }
+            $self->_refresh_track_row($track->{id});
         }
     }
 }
@@ -1093,13 +1176,12 @@ sub _tracklist_context_menu {
     my ($path) = $self->track_view->get_path_at_pos($event->x, $event->y);
     return unless $path;
     $self->track_view->get_selection()->select_path($path);
-    my ($ridx) = $path->get_indices();
-    my $track   = $self->_playlist->[$ridx];
+    my $track = $self->_track_at_path($path);
 
     my $menu = Gtk3::Menu->new();
 
     my $play_item = Gtk3::MenuItem->new_with_label('Play');
-    $play_item->signal_connect(activate => sub { $self->_play_index($ridx) });
+    $play_item->signal_connect(activate => sub { $self->_play_at_path($path) });
     $menu->append($play_item);
 
     my $edit_item = Gtk3::MenuItem->new_with_label('Edit Metadata…');
@@ -1205,10 +1287,9 @@ sub _update_now_playing {
     $self->win->set_title("Drive Player — $text");
 }
 
-sub _highlight_row {
-    my ($self, $idx) = @_;
-    my $path = Gtk3::TreePath->new_from_indices($idx);
-    my $sel  = $self->track_view->get_selection();
+sub _highlight_path {
+    my ($self, $path) = @_;
+    my $sel = $self->track_view->get_selection();
     $sel->unselect_all();
     $sel->select_path($path);
     $self->track_view->scroll_to_cell($path, undef, TRUE, 0.5, 0.0);

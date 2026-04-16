@@ -142,6 +142,11 @@ sub _clean_field {
 sub _clean_title {
     my ($t) = @_;
 
+    # Normalise underscores and whitespace before any pattern matching
+    $t =~ s/_/ /g;
+    $t =~ s/\s+/ /g;
+    $t =~ s/^\s+|\s+$//g;
+
     # Strip leading track number: "01.", "01 -", "(01)", "[01]", "01 "
     $t =~ s/^\s*[\(\[]?\d{1,3}[\)\]]?[\s.\-]+//;
 
@@ -232,11 +237,11 @@ sub _fetch_musicbrainz {
 
     for my $query (@attempts) {
         my $url = "$MB_BASE/recording?query=" . uri_escape_utf8($query)
-                . '&fmt=json&limit=5&inc=releases+artist-credits+tags';
+                . '&fmt=json&limit=5&inc=releases+artist-credits+tags+genres';
         my $data = $self->_get_mb($url) or next;
         my $recs = $data->{recordings}  or next;
         next unless @$recs;
-        my $meta = _parse_mb($recs->[0]);
+        my $meta = $self->_parse_mb_with_release($recs->[0]);
         return $meta if $meta && %$meta;
     }
     return;
@@ -244,9 +249,29 @@ sub _fetch_musicbrainz {
 
 sub _fetch_musicbrainz_by_id {
     my ($self, $mb_id) = @_;
-    my $url  = "$MB_BASE/recording/$mb_id?fmt=json&inc=releases+artist-credits+tags";
+    my $url  = "$MB_BASE/recording/$mb_id?fmt=json&inc=releases+artist-credits+tags+genres";
     my $rec  = $self->_get_mb($url) or return;
-    return _parse_mb($rec);
+    return $self->_parse_mb_with_release($rec);
+}
+
+sub _parse_mb_with_release {
+    my ($self, $rec) = @_;
+    my %meta = %{ _parse_mb($rec) };
+
+    # If we didn't get a genre from the recording, try the release-group level
+    if (!$meta{genre} && (my $rel = _best_mb_release($rec->{releases} // []))) {
+        my $rg_url = "$MB_BASE/release/$rel->{id}?fmt=json&inc=release-groups+genres+tags";
+        my $rd = $self->_get_mb($rg_url);
+        if ($rd) {
+            $meta{genre} //= _best_mb_genre($rd->{genres}, $rd->{tags});
+            if (!$meta{genre} && (my $rg = $rd->{'release-group'})) {
+                my $rg_full_url = "$MB_BASE/release-group/$rg->{id}?fmt=json&inc=genres+tags";
+                my $rgd = $self->_get_mb($rg_full_url);
+                $meta{genre} //= _best_mb_genre($rgd->{genres}, $rgd->{tags}) if $rgd;
+            }
+        }
+    }
+    return \%meta;
 }
 
 sub _parse_mb {
@@ -263,11 +288,22 @@ sub _parse_mb {
         $meta{album} = $rel->{title};
         ($meta{year}) = ($rel->{date} // '') =~ /^(\d{4})/;
     }
-    if (my $tags = $rec->{tags}) {
-        my ($top) = sort { $b->{count} <=> $a->{count} } @$tags;
-        $meta{genre} = ucfirst($top->{name}) if $top;
-    }
+    $meta{genre} = _best_mb_genre($rec->{genres}, $rec->{tags});
     return \%meta;
+}
+
+# Prefer MB's curated genres over folksonomy tags; pick the highest-count entry.
+sub _best_mb_genre {
+    my ($genres, $tags) = @_;
+    if ($genres && @$genres) {
+        my ($top) = sort { $b->{count} <=> $a->{count} } @$genres;
+        return ucfirst($top->{name}) if $top;
+    }
+    if ($tags && @$tags) {
+        my ($top) = sort { $b->{count} <=> $a->{count} } @$tags;
+        return ucfirst($top->{name}) if $top;
+    }
+    return;
 }
 
 sub _best_mb_release {

@@ -363,6 +363,22 @@ sub reset_metadata_fetched {
     $self->_rs('Track')->update_all({ metadata_fetched => 0 });
 }
 
+sub reset_metadata_fetched_incomplete {
+    my ($self) = @_;
+    $self->_rs('Track')->search({
+        metadata_fetched => 1,
+        -or => [
+            genre  => undef,
+            genre  => '',
+            artist => undef,
+            artist => '',
+            album  => undef,
+            album  => '',
+            year   => undef,
+        ],
+    })->update_all({ metadata_fetched => 0 });
+}
+
 sub clear_scan_folder_tracks {
     my ($self, $scan_folder_id) = @_;
     # Collect folder IDs, then bulk-delete tracks and folders.

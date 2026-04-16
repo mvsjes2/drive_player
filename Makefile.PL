@@ -15,7 +15,7 @@ WriteMakefile(
         'DBIx::Class'      => 0,
         'Glib'             => 0,
         'Gtk3'             => 0,
-        'Google::RestApi'  => 0,
+        'Google::RestApi'  => '2.2.2',
         'JSON::MaybeXS'    => 0,
         'Log::Log4perl'    => 0,
         'Moo'              => 0,
@@ -23,6 +23,8 @@ WriteMakefile(
         'SQL::Translator'  => '0.11018',
         'ToolSet'          => 0,
         'Type::Tiny'       => 0,
+        'URI'              => 0,
+        'YAML'             => 0,
         'YAML::XS'         => 0,
     },
     TEST_REQUIRES => {

@@ -3,7 +3,7 @@ package App::DrivePlayer;
 use strict;
 use warnings;
 
-our $VERSION = '0.1.0';
+our $VERSION = '0.2.0';
 
 1;
 
@@ -15,7 +15,7 @@ App::DrivePlayer - GTK3 music player for Google Drive
 
 =head1 VERSION
 
-0.1.0
+0.2.0
 
 =head1 DESCRIPTION
 

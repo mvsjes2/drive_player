@@ -298,7 +298,8 @@ sub _build_sidebar {
     my ($self) = @_;
     my $sw = Gtk3::ScrolledWindow->new();
     $sw->set_policy('automatic', 'automatic');
-    $sw->set_size_request(100, -1);
+    $sw->set_size_request(100, 1);
+    $sw->set_propagate_natural_height(FALSE);
 
     # TreeStore: label (str), type (str: 'category'|'artist'|'album'|'folder'),
     #            value (str: artist name, album name, folder_id)
@@ -312,7 +313,7 @@ sub _build_sidebar {
     $view->signal_connect('button-press-event' => sub { $self->_sidebar_button_press($view, $_[1]) });
     $self->sidebar_view($view);
 
-    $view->set_size_request(100, -1);
+    $view->set_size_request(100, 1);
 
     my $renderer = Gtk3::CellRendererText->new();
     $renderer->set(ellipsize => 'end');
@@ -332,18 +333,47 @@ sub _build_sidebar {
 
 sub _build_alpha_strip {
     my ($self) = @_;
-    my $vbox = Gtk3::Box->new('vertical', 0);
 
+    my $css = Gtk3::CssProvider->new();
+    $css->load_from_data(
+        'treeview.alpha-nav { font-size: 10px; padding: 0; }'
+        . ' treeview.alpha-nav row { min-height: 0; padding: 1px 0; }'
+    );
+
+    my $store = Gtk3::ListStore->new('Glib::String');
     for my $letter ('#', 'A' .. 'Z') {
-        my $btn = Gtk3::Button->new_with_label($letter);
-        $btn->set_relief('none');
-        $btn->set_can_focus(FALSE);
-        $btn->set_size_request(20, 1);
-        $btn->signal_connect(clicked => sub { $self->_sidebar_jump_to_letter($letter) });
-        $vbox->pack_start($btn, TRUE, TRUE, 0);
+        my $iter = $store->append();
+        $store->set($iter, 0, $letter);
     }
 
-    return $vbox;
+    my $view = Gtk3::TreeView->new($store);
+    $view->set_headers_visible(FALSE);
+    $view->set_fixed_height_mode(TRUE);
+    $view->set_can_focus(FALSE);
+    $view->get_style_context()->add_class('alpha-nav');
+    $view->get_style_context()->add_provider($css, 600);
+
+    my $renderer = Gtk3::CellRendererText->new();
+    $renderer->set(xalign => 0.5);
+    my $col = Gtk3::TreeViewColumn->new_with_attributes('', $renderer, text => 0);
+    $col->set_sizing('fixed');
+    $col->set_fixed_width(32);
+    $view->append_column($col);
+
+    $view->signal_connect('row-activated' => sub {
+        my ($tv, $path, $col) = @_;
+        my $iter = $store->get_iter($path) or return;
+        my $letter = $store->get($iter, 0);
+        $self->_sidebar_jump_to_letter($letter);
+        $tv->get_selection()->unselect_all();
+    });
+
+    my $sw = Gtk3::ScrolledWindow->new();
+    $sw->set_policy('never', 'automatic');
+    $sw->set_size_request(32, 1);
+    $sw->set_propagate_natural_height(FALSE);
+    $sw->add($view);
+    return $sw;
 }
 
 sub _sidebar_jump_to_letter {
@@ -376,6 +406,8 @@ sub _build_tracklist {
 
     my $sw = Gtk3::ScrolledWindow->new();
     $sw->set_policy('automatic', 'automatic');
+    $sw->set_size_request(-1, 1);
+    $sw->set_propagate_natural_height(FALSE);
     $vbox->pack_start($sw, TRUE, TRUE, 0);
 
     my $count_lbl = Gtk3::Label->new('');

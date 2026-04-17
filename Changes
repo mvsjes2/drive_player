@@ -1,5 +1,16 @@
 Revision history for App::DrivePlayer.
 
+0.2.2 2026-04-16
+        - Fix duration_ms and genre not propagating to new devices on sheet
+          pull: duration_ms was overwritten by Drive scans (moved to metadata
+          fields) and was absent from skeleton-track creation.
+
+0.2.1 2026-04-16
+        - Fix window height: replace alpha-strip button VBox with TreeView so
+          the sidebar ScrolledWindow can properly constrain minimum height,
+          allowing the main window to be resized smaller.
+        - Alpha strip width increased to 32px to avoid scrollbar overlap.
+
 0.2.0 2026-04-15
         - GUI refactored into Moo roles (MetadataFetch, SheetSync, FolderBrowse).
         - Background metadata fetch via fork+pipe; UI remains responsive.

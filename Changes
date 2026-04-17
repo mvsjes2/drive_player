@@ -1,5 +1,10 @@
 Revision history for App::DrivePlayer.
 
+0.2.3 2026-04-17
+        - Edit Metadata dialog now auto-syncs to the Google Sheet after save,
+          so manual edits (e.g. fixing a genre) propagate to other devices
+          without waiting for the next Library → Sync.
+
 0.2.2 2026-04-16
         - Fix duration_ms and genre not propagating to new devices on sheet
           pull: duration_ms was overwritten by Drive scans (moved to metadata

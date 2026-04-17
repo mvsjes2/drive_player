@@ -1286,6 +1286,7 @@ sub _edit_metadata_dialog {
         }
         $self->db->update_track_metadata($track->{id}, %fields);
         $self->_load_library();
+        $self->_auto_sync_to_sheet();
     }
     $dlg->destroy();
 }

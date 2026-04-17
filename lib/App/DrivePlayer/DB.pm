@@ -124,8 +124,8 @@ sub folders_for_scan_folder {
 
 # ---------- tracks ----------
 
-my @STRUCTURAL_FIELDS = qw( folder_id folder_path mime_type size modified_time duration_ms );
-my @METADATA_FIELDS   = qw( title artist album track_number year genre composer comment );
+my @STRUCTURAL_FIELDS = qw( folder_id folder_path mime_type size modified_time );
+my @METADATA_FIELDS   = qw( title artist album track_number year duration_ms genre composer comment );
 
 sub upsert_track {
     my ($self, %t) = @_;
@@ -193,6 +193,7 @@ sub upsert_track_from_metadata {
             album        => _trunc($fields{album},     'album'),
             track_number => $fields{track_number} // undef,
             year         => $fields{year}         // undef,
+            duration_ms  => $fields{duration_ms}  // undef,
             genre        => _trunc($fields{genre},     'genre'),
             composer     => _trunc($fields{composer},  'composer'),
             comment      => _trunc($fields{comment},   'comment'),

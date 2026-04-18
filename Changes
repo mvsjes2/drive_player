@@ -1,6 +1,6 @@
 Revision history for App::DrivePlayer.
 
-0.2.5  (unreleased)
+0.2.5 2026-04-18
         - Unified sheet sync: Library -> Sync now does a single
           bidirectional reconcile after the Drive scan.  Rules: both
           sides have a value -> DB wins; one side blank -> filled from
